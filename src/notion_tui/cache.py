@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS pages (
     last_edited TEXT NOT NULL,
     url         TEXT NOT NULL,
     seen_at     REAL NOT NULL
+    -- kind     TEXT: page | data_source (added by migration)
+    -- has_body INTEGER: 1/0 = page has / has no content blocks, NULL = not checked since last edit
 );
 CREATE INDEX IF NOT EXISTS pages_last_edited ON pages(last_edited DESC);
 
@@ -54,10 +56,18 @@ class Cache:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.executescript(SCHEMA)
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(pages)")}
+        with self.db:
+            if "kind" not in columns:  # caches made before databases were listed
+                self.db.execute("ALTER TABLE pages ADD COLUMN kind TEXT NOT NULL DEFAULT 'page'")
+            if "has_body" not in columns:  # caches made before the database entries option
+                self.db.execute("ALTER TABLE pages ADD COLUMN has_body INTEGER")
 
     def recent_pages(self, limit: int = 200) -> list[Page]:
         rows = self.db.execute(
-            "SELECT id, title, last_edited, url FROM pages ORDER BY last_edited DESC LIMIT ?", (limit,)
+            "SELECT p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), p.kind "
+            "FROM pages p LEFT JOIN nodes n ON n.id = p.id ORDER BY p.last_edited DESC LIMIT ?",
+            (limit,),
         )
         return [Page(*row) for row in rows]
 
@@ -65,12 +75,28 @@ class Cache:
         now = time.time()
         with self.db:
             self.db.executemany(
-                "INSERT INTO pages (id, title, last_edited, url, seen_at) VALUES (?, ?, ?, ?, ?) "
+                "INSERT INTO pages (id, title, last_edited, url, seen_at, kind) VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET title=excluded.title, last_edited=excluded.last_edited, "
-                "url=excluded.url, seen_at=excluded.seen_at",
-                [(p.id, p.title, p.last_edited, p.url, now) for p in pages],
+                "url=excluded.url, seen_at=excluded.seen_at, kind=excluded.kind, "
+                # An edit may add or remove content: check the body again.
+                "has_body=CASE WHEN pages.last_edited = excluded.last_edited THEN pages.has_body END",
+                [(p.id, p.title, p.last_edited, p.url, now, p.kind) for p in pages],
             )
-        self.put_nodes([Node(p.id, "page", p.title, p.parent_kind, p.parent_id) for p in pages if p.parent_kind])
+        self.put_nodes([Node(p.id, p.kind, p.title, p.parent_kind, p.parent_id) for p in pages if p.parent_kind])
+
+    def has_body(self, page_ids: list[str]) -> dict[str, bool | None]:
+        """Whether each page has content blocks; None when not checked since its last edit."""
+        found: dict[str, bool | None] = dict.fromkeys(page_ids)
+        for start in range(0, len(page_ids), 500):
+            chunk = page_ids[start:start + 500]
+            marks = ",".join("?" * len(chunk))
+            for page_id, value in self.db.execute(f"SELECT id, has_body FROM pages WHERE id IN ({marks})", chunk):
+                found[page_id] = None if value is None else bool(value)
+        return found
+
+    def put_has_body(self, page_id: str, has_body: bool) -> None:
+        with self.db:
+            self.db.execute("UPDATE pages SET has_body = ? WHERE id = ?", (int(has_body), page_id))
 
     def put_nodes(self, nodes: list[Node]) -> None:
         now = time.time()

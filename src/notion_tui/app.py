@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime
 
@@ -14,15 +15,17 @@ from textual.screen import ModalScreen
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Button, Footer, Input, Label, ListItem, ListView, Markdown, Static
+from textual.widgets import Button, Footer, Input, Label, ListItem, ListView, Markdown, RadioButton, RadioSet, Static
 
 from . import desktop, ntn
 from .cache import MAX_DEPTH, Cache
 from .ntn import NtnError, Page
+from .options import DATABASE_ENTRIES, Options
 
 PREVIEW_DEBOUNCE = 0.12  # seconds to wait after the cursor stops before loading a preview
 SEARCH_DEBOUNCE = 0.4  # seconds to wait after typing stops before asking Notion
 LOAD_MORE_MARGIN = 5  # fetch the next batch when the cursor is this close to the end
+BODY_CHECKS = 2  # parallel ntn calls when checking which database entries have content
 
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _PROPERTY = re.compile(r"^'?([^':][^:]*?)'?:\s*(.*)$")
@@ -50,6 +53,33 @@ def split_page(md: str, title: str) -> tuple[list[tuple[str, str]], str]:
     return properties, md.strip()
 
 
+# System columns that only add width to a database preview.
+_HIDDEN_COLUMN_TYPES = {"created_time", "last_edited_time", "created_by", "last_edited_by", "relation", "rollup", "files", "button", "unique_id"}
+
+
+def rows_markdown(rows: list[dict], has_more: bool) -> str:
+    """A database's rows as a Markdown table: the title column first, then non-empty columns."""
+    if not rows:
+        return "_(no rows)_"
+    columns: list[str] = []
+    for row in rows:
+        for name, prop in row.get("properties", {}).items():
+            if name not in columns and prop.get("type") not in _HIDDEN_COLUMN_TYPES:
+                columns.append(name)
+    columns.sort(key=lambda name: rows[0]["properties"].get(name, {}).get("type") != "title")
+    cells = [[ntn.value_text(row["properties"][c]) if c in row["properties"] else "" for c in columns] for row in rows]
+    keep = [i for i, c in enumerate(columns) if i == 0 or any(r[i] for r in cells)]
+
+    def line(values: list[str]) -> str:
+        return "| " + " | ".join(v.replace("|", "\\|").replace("\n", " ") for v in values) + " |"
+
+    out = [line([columns[i].strip() for i in keep]), "|" + "---|" * len(keep)]
+    out += [line([r[i] for i in keep]) for r in cells]
+    if has_more:
+        out.append(f"\n_First {len(rows)} rows. Press o to see all in Notion._")
+    return "\n".join(out)
+
+
 def _local(iso: str) -> datetime | None:
     try:
         return datetime.fromisoformat(iso).astimezone()
@@ -68,7 +98,8 @@ class PageItem(ListItem):
         self.page = page
 
     def compose(self) -> ComposeResult:
-        yield Label(self.page.title, classes="title", markup=False)
+        marker = "▦ " if self.page.kind == "data_source" else ""
+        yield Label(marker + self.page.title, classes="title", markup=False)
 
 
 class Breadcrumb(Widget):
@@ -149,6 +180,54 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(yes)
 
 
+_ENTRY_LABELS = {
+    "yes": "yes: always",
+    "never": "never",
+    "show-non-empty": "show-non-empty: only entries with page content (default)",
+}
+
+
+class OptionsScreen(ModalScreen[None]):
+    """Options dialog. Each change is saved at once; the list is refreshed on close."""
+
+    AUTO_FOCUS = "RadioSet"
+    BINDINGS = [Binding("escape,comma,q", "close", "close")]
+    DEFAULT_CSS = """
+    OptionsScreen { align: center middle; }
+    #options { width: 72; height: auto; padding: 1 2; border: round $accent; background: $surface; }
+    #options Label { width: 100%; }
+    #options RadioSet { width: 100%; margin: 1 0; }
+    #options .hint { color: $text-muted; }
+    """
+
+    def __init__(self, options: Options) -> None:
+        super().__init__()
+        self.options = options
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="options"):
+            yield Label("[b]Show pages that are database entries[/b]")
+            with RadioSet(id="database_entries"):
+                for value in DATABASE_ENTRIES:
+                    yield RadioButton(_ENTRY_LABELS[value], value=value == self.options.database_entries, name=value)
+            yield Label("↑/↓ move · enter choose · esc close", classes="hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#options").border_title = "Options"
+        # RadioSet starts its highlight on the first button; start it on the saved choice instead.
+        radio_set = self.query_one("#database_entries", RadioSet)
+        for _ in range(max(radio_set.pressed_index, 0)):
+            radio_set.action_next_button()
+
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        if event.radio_set.id == "database_entries" and event.pressed.name:
+            self.options.database_entries = event.pressed.name
+            self.options.save()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class NotionTUI(App):
     TITLE = "notion-tui"
     CSS = """
@@ -179,14 +258,17 @@ class NotionTUI(App):
         Binding("d", "trash", "trash"),
         Binding("o", "browser", "open in Notion"),
         Binding("r", "refresh", "refresh"),
+        Binding("comma", "options", "options"),
         Binding("escape", "back", "back", show=False),
         Binding("question_mark", "help", "help"),
         Binding("q", "quit", "quit"),
     ]
 
-    def __init__(self, cache: Cache | None = None) -> None:
+    def __init__(self, cache: Cache | None = None, options: Options | None = None) -> None:
         super().__init__()
         self.cache = cache or Cache()
+        self.options = options or Options.load()
+        self.loaded: list[Page] = []  # pages fetched for the current list, before the options filter
         self.shown: list[Page] = []  # pages currently in the list, in order
         self.current: Page | None = None  # highlighted page
         self.query_text = ""  # active search ("" = recent pages)
@@ -223,15 +305,41 @@ class NotionTUI(App):
 
     def _update_status(self) -> None:
         count = f"{len(self.shown)}{'+' if self.next_cursor else ''} pages"
+        hidden = len(self.loaded) - len(self.shown)
+        if hidden:
+            count += f" · {hidden} entries hidden"
         label = f"“{self.query_text}” · {count}" if self.query_text else f"Recent · {count}"
         if self._loading:
             label += " · loading…"
         self.query_one("#status", Static).update(label)
 
+    def _visible(self, pages: list[Page]) -> list[Page]:
+        """Apply the database entries option."""
+        mode = self.options.database_entries
+        if mode == "yes":
+            return pages
+        if mode == "never":
+            return [p for p in pages if not p.is_entry]
+        bodies = self.cache.has_body([p.id for p in pages if p.is_entry])
+        return [p for p in pages if not p.is_entry or bodies[p.id]]
+
+    def _unchecked_entries(self) -> list[Page]:
+        if self.options.database_entries != "show-non-empty":
+            return []
+        entries = [p for p in self.loaded if p.is_entry]
+        bodies = self.cache.has_body([p.id for p in entries])
+        return [p for p in entries if bodies[p.id] is None]
+
     async def _show_pages(self, pages: list[Page], keep_id: str | None = None, fallback_index: int = 0) -> None:
         """Replace the list, keeping the cursor on `keep_id` when it is still present."""
+        self.loaded = pages
+        await self._render_list(keep_id, fallback_index)
+        if self._unchecked_entries():
+            self.check_bodies()
+
+    async def _render_list(self, keep_id: str | None = None, fallback_index: int = 0) -> None:
         list_view = self.query_one(PageList)
-        self.shown = pages
+        pages = self.shown = self._visible(self.loaded)
         await list_view.clear()
         await list_view.extend(PageItem(p) for p in pages)
         if pages:
@@ -243,11 +351,33 @@ class NotionTUI(App):
         self._update_status()
 
     async def _append_pages(self, pages: list[Page]) -> None:
-        known = {p.id for p in self.shown}
+        known = {p.id for p in self.loaded}
         new = [p for p in pages if p.id not in known]
-        self.shown.extend(new)
-        await self.query_one(PageList).extend(PageItem(p) for p in new)
+        self.loaded.extend(new)
+        visible = self._visible(new)
+        self.shown.extend(visible)
+        await self.query_one(PageList).extend(PageItem(p) for p in visible)
         self._update_status()
+        if self._unchecked_entries():
+            self.check_bodies()
+
+    @work(exclusive=True, group="bodies")
+    async def check_bodies(self) -> None:
+        """Find out which database entries have content, then show the ones that do."""
+        limit = asyncio.Semaphore(BODY_CHECKS)
+
+        async def check(page: Page) -> bool:
+            async with limit:
+                try:
+                    has_body = await ntn.has_body(page.id)
+                except NtnError:
+                    return False  # stays unchecked and hidden; tried again on the next list load
+                self.cache.put_has_body(page.id, has_body)
+                return has_body
+
+        found = await asyncio.gather(*(check(p) for p in self._unchecked_entries()))
+        if any(found):
+            await self._render_list(keep_id=self.current.id if self.current else None)
 
     @work(exclusive=True, group="list")
     async def load_list(self, query: str, more: bool = False) -> None:
@@ -364,7 +494,8 @@ class NotionTUI(App):
         if page is None:
             return
         cached = self.cache.content(page.id)
-        if cached and cached[1] == page.last_edited:
+        # A database's last_edited doesn't always move when its rows change, so tables are always refetched.
+        if cached and cached[1] == page.last_edited and page.kind == "page":
             await self._render_page(page, cached[0])
             self._prefetch_next()
             return
@@ -374,7 +505,7 @@ class NotionTUI(App):
     @work(exclusive=True, group="preview")
     async def fetch_preview(self, page: Page) -> None:
         try:
-            markdown = await ntn.get_markdown(page.id)
+            markdown = await self._fetch_content(page)
         except NtnError as err:
             if self.current and self.current.id == page.id:
                 await self._render_message(f"Could not load page: {err}")
@@ -383,6 +514,11 @@ class NotionTUI(App):
         if self.current and self.current.id == page.id:
             await self._render_page(page, markdown)
         self._prefetch_next()
+
+    async def _fetch_content(self, page: Page) -> str:
+        if page.kind == "data_source":
+            return rows_markdown(*await ntn.query_rows(page.id))
+        return await ntn.get_markdown(page.id)
 
     def _prefetch_next(self) -> None:
         """Warm the cache for the row below the cursor, so moving down feels instant."""
@@ -396,7 +532,7 @@ class NotionTUI(App):
     @work(exclusive=True, group="prefetch")
     async def prefetch(self, page: Page) -> None:
         try:
-            self.cache.put_content(page, await ntn.get_markdown(page.id))
+            self.cache.put_content(page, await self._fetch_content(page))
             await self._complete_path(page)
         except NtnError:
             pass  # best effort; the real fetch will report errors
@@ -421,9 +557,15 @@ class NotionTUI(App):
             self.cache.invalidate(self.current.id)
         self.load_list(self.query_text)
 
+    def _is_page(self, page: Page | None, verb: str) -> bool:
+        if page is not None and page.kind != "page":
+            self.notify(f"Databases can't be {verb} here. Press o to open it in Notion.", severity="warning")
+            return False
+        return page is not None
+
     def action_edit(self) -> None:
         page = self.current
-        if page is None:
+        if not self._is_page(page, "edited"):
             return
         with self.suspend():
             code = ntn.run_interactive("pages", "edit", page.id)
@@ -442,7 +584,7 @@ class NotionTUI(App):
 
     def action_trash(self) -> None:
         page = self.current
-        if page is None:
+        if not self._is_page(page, "trashed"):
             return
 
         def confirmed(yes: bool | None) -> None:
@@ -460,8 +602,19 @@ class NotionTUI(App):
             return
         self.cache.forget(page.id)
         index = next((i for i, p in enumerate(self.shown) if p.id == page.id), 0)
-        await self._show_pages([p for p in self.shown if p.id != page.id], fallback_index=index)
+        await self._show_pages([p for p in self.loaded if p.id != page.id], fallback_index=index)
         self.notify(f"Trashed “{page.title}”")
+
+    def action_options(self) -> None:
+        def closed(_: None) -> None:
+            self.call_later(self._options_changed)
+
+        self.push_screen(OptionsScreen(self.options), closed)
+
+    async def _options_changed(self) -> None:
+        await self._render_list(keep_id=self.current.id if self.current else None)
+        if self._unchecked_entries():
+            self.check_bodies()
 
     def action_browser(self) -> None:
         page = self.current
