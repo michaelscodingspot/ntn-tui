@@ -4,6 +4,14 @@ Terminal UI for Notion, built on the [`ntn`](https://developers.notion.com) CLI.
 Layout: page list on the left, Markdown preview on the right. The preview's top line
 shows the page's path, e.g. `Notes / Quick Notes` (cut from the left with `…` when long).
 
+![Page list with Markdown preview](docs/screenshots/main.png)
+
+| Database preview | Search |
+|---|---|
+| ![Database shown as a table](docs/screenshots/database.png) | ![Search results](docs/screenshots/search.png) |
+
+_Screenshots use a demo workspace._
+
 ## Run
 
 ```
