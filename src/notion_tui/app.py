@@ -7,16 +7,19 @@ import subprocess
 import webbrowser
 from datetime import datetime
 
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.reactive import reactive
 from textual.timer import Timer
+from textual.widget import Widget
 from textual.widgets import Button, Footer, Input, Label, ListItem, ListView, Markdown, Static
 
 from . import ntn
-from .cache import Cache
+from .cache import MAX_DEPTH, Cache
 from .ntn import NtnError, Page
 
 PREVIEW_DEBOUNCE = 0.12  # seconds to wait after the cursor stops before loading a preview
@@ -56,13 +59,6 @@ def _local(iso: str) -> datetime | None:
         return None
 
 
-def short_date(iso: str) -> str:
-    dt = _local(iso)
-    if dt is None:
-        return ""
-    return dt.strftime("%m-%d") if dt.year == datetime.now().year else dt.strftime("%y-%m-%d")
-
-
 def long_date(iso: str) -> str:
     dt = _local(iso)
     return dt.strftime("%Y-%m-%d %H:%M") if dt else "unknown"
@@ -74,9 +70,26 @@ class PageItem(ListItem):
         self.page = page
 
     def compose(self) -> ComposeResult:
-        with Horizontal():
-            yield Label(self.page.title, classes="title", markup=False)
-            yield Label(short_date(self.page.last_edited), classes="date")
+        yield Label(self.page.title, classes="title", markup=False)
+
+
+class Breadcrumb(Widget):
+    """One line: "Notes / Quick Notes". When too long, the start is cut and replaced by "…"."""
+
+    parts: reactive[tuple[str, ...]] = reactive(())
+
+    def render(self) -> Text:
+        text = Text(no_wrap=True)
+        for i, part in enumerate(self.parts):
+            if i:
+                text.append(" / ", style="dim")
+            text.append(part, style="bold" if i == len(self.parts) - 1 else "")
+        width = self.content_size.width
+        if width and text.cell_len > width:
+            while text.cell_len > width - 1 and len(text):
+                text = text[1:]
+            text = Text("…", style="dim") + text
+        return text
 
 
 class PageList(ListView):
@@ -148,17 +161,16 @@ class NotionTUI(App):
     #body { height: 1fr; }
     #list-pane { width: 44; border: round $border-blurred; border-title-color: $text-muted; }
     #list-pane:focus-within { border: round $accent; border-title-color: $accent; }
-    #preview-pane { width: 1fr; border: round $border-blurred; padding: 0 1; border-subtitle-color: $text-muted; }
-    #preview-pane:focus { border: round $accent; }
+    #preview-pane { width: 1fr; border: round $border-blurred; border-subtitle-color: $text-muted; }
+    #preview-pane:focus-within { border: round $accent; }
+    #crumbs { height: 1; padding: 0 1; margin-bottom: 1; color: $text; }
+    PreviewScroll { padding: 0 1; }
     Screen.full #list-pane { display: none; }
     PageList { background: transparent; scrollbar-size-vertical: 1; }
     PageItem { height: 1; padding: 0 1; }
     PageList > PageItem.-highlight { background: $block-cursor-blurred-background; }
     PageList:focus > PageItem.-highlight { background: $accent; color: $background; text-style: bold; }
-    PageList:focus > PageItem.-highlight .date { color: $background; }
-    PageItem Horizontal { height: 1; }
     PageItem .title { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
-    PageItem .date { width: 9; text-align: right; color: $text-muted; }
     #preview { background: transparent; }
     """
 
@@ -167,7 +179,7 @@ class NotionTUI(App):
         Binding("e", "edit", "edit"),
         Binding("n", "new", "new"),
         Binding("d", "trash", "trash"),
-        Binding("o", "browser", "browser"),
+        Binding("o", "browser", "open in Notion"),
         Binding("r", "refresh", "refresh"),
         Binding("escape", "back", "back", show=False),
         Binding("question_mark", "help", "help"),
@@ -195,13 +207,14 @@ class NotionTUI(App):
         with Horizontal(id="body"):
             with Vertical(id="list-pane"):
                 yield PageList(id="pages")
-            with PreviewScroll(id="preview-pane"):
-                yield Markdown("", id="preview")
+            with Vertical(id="preview-pane"):
+                yield Breadcrumb(id="crumbs")
+                with PreviewScroll():
+                    yield Markdown("", id="preview")
         yield Footer()
 
     async def on_mount(self) -> None:
         self.query_one("#list-pane").border_title = "Pages"
-        self.query_one("#preview-pane").border_title = "Preview"
         self.query_one(PageList).focus()
         cached = self.cache.recent_pages()
         if cached:
@@ -301,25 +314,52 @@ class NotionTUI(App):
     async def _render_message(self, text: str) -> None:
         self._rendered_id = None
         self.query_one("#preview-pane").border_subtitle = ""
+        self.query_one(Breadcrumb).parts = ()
         await self.query_one("#preview", Markdown).update(f"_{text}_")
 
     async def _render_page(self, page: Page, markdown: str | None, note: str = "") -> None:
-        pane = self.query_one("#preview-pane", PreviewScroll)
-        pane.border_subtitle = note
-        header = f"# {page.title}\n\n_edited {long_date(page.last_edited)}_"
-        if page.url:
-            header += f" · [open in Notion]({page.url})"
+        self.query_one("#preview-pane").border_subtitle = note
         if markdown is None:
-            body = "_loading…_"
+            content = "_loading…_"
         else:
             properties, body = split_page(markdown, page.title)
+            content = body or "_(empty page)_"
             if properties:
-                header += "\n\n" + "  \n".join(f"**{k}:** {v}" for k, v in properties)
-            body = body or "_(empty page)_"
-        await self.query_one("#preview", Markdown).update(f"{header}\n\n---\n\n{body}")
+                content = "  \n".join(f"**{k}:** {v}" for k, v in properties) + "\n\n---\n\n" + content
+        await self.query_one("#preview", Markdown).update(content)
         if self._rendered_id != page.id:
-            pane.scroll_home(animate=False)
+            self.query_one(PreviewScroll).scroll_home(animate=False)
             self._rendered_id = page.id
+            self._show_path(page)
+
+    # ---------- breadcrumb path ----------
+
+    def _show_path(self, page: Page) -> None:
+        """Show the path from the cache at once; look up missing ancestors in the background."""
+        titles, missing = self.cache.ancestry(page.id)
+        self.query_one(Breadcrumb).parts = (*titles, page.title) if missing is None else (page.title,)
+        if missing is not None:
+            self.resolve_path(page)
+
+    async def _complete_path(self, page: Page) -> list[str]:
+        """Fetch ancestors not cached yet (one ntn call each). Unreachable ones show as "…"."""
+        titles, missing = self.cache.ancestry(page.id)
+        for _ in range(MAX_DEPTH):
+            if missing is None:
+                break
+            try:
+                node = await ntn.get_node(*missing)
+            except NtnError:
+                return ["…", *titles]  # no access to that ancestor
+            self.cache.put_nodes([node])
+            titles, missing = self.cache.ancestry(page.id)
+        return titles
+
+    @work(exclusive=True, group="path")
+    async def resolve_path(self, page: Page) -> None:
+        titles = await self._complete_path(page)
+        if self.current and self.current.id == page.id:
+            self.query_one(Breadcrumb).parts = (*titles, page.title)
 
     async def _show_current(self) -> None:
         page = self.current
@@ -359,6 +399,7 @@ class NotionTUI(App):
     async def prefetch(self, page: Page) -> None:
         try:
             self.cache.put_content(page, await ntn.get_markdown(page.id))
+            await self._complete_path(page)
         except NtnError:
             pass  # best effort; the real fetch will report errors
 
@@ -430,6 +471,7 @@ class NotionTUI(App):
         try:
             subprocess.Popen(
                 ["xdg-open", self.current.url],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,

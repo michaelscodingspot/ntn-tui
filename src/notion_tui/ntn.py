@@ -25,6 +25,19 @@ class Page:
     title: str
     last_edited: str  # ISO-8601, as returned by Notion
     url: str
+    parent_kind: str = ""  # "" = unknown, "workspace" = top level, else a Node kind
+    parent_id: str = ""
+
+
+@dataclass(frozen=True)
+class Node:
+    """One step in a page's ancestry: a page, database, data source or block."""
+
+    id: str
+    kind: str  # page | database | data_source | block
+    title: str  # "" for steps that have no name of their own (blocks, data sources)
+    parent_kind: str  # "workspace" at the top
+    parent_id: str
 
 
 async def _run(*args: str) -> str:
@@ -56,12 +69,33 @@ def _title(obj: dict) -> str:
     return "(untitled)"
 
 
+def _parent(obj: dict) -> tuple[str, str]:
+    """(kind, id) of an object's parent; ("workspace", "") at the top."""
+    parent = obj.get("parent") or {}
+    match parent.get("type"):
+        case "page_id":
+            return "page", parent["page_id"]
+        case "database_id":
+            return "database", parent["database_id"]
+        case "data_source_id":
+            # Skip the data source hop when Notion already tells us its database.
+            if parent.get("database_id"):
+                return "database", parent["database_id"]
+            return "data_source", parent["data_source_id"]
+        case "block_id":
+            return "block", parent["block_id"]
+    return "workspace", ""
+
+
 def _page(obj: dict) -> Page:
+    parent_kind, parent_id = _parent(obj)
     return Page(
         id=obj["id"],
         title=_title(obj),
         last_edited=obj.get("last_edited_time", ""),
         url=obj.get("url", ""),
+        parent_kind=parent_kind,
+        parent_id=parent_id,
     )
 
 
@@ -84,6 +118,27 @@ async def search(query: str = "", cursor: str | None = None, page_size: int = 50
         if r.get("object") == "page" and not r.get("in_trash") and not r.get("archived")
     ]
     return pages, data.get("next_cursor") if data.get("has_more") else None
+
+
+_NODE_ENDPOINTS = {
+    "page": "v1/pages/",
+    "database": "v1/databases/",
+    "data_source": "v1/data_sources/",
+    "block": "v1/blocks/",
+}
+
+
+async def get_node(kind: str, node_id: str) -> Node:
+    """Fetch one ancestor so its title and parent can be cached."""
+    obj = json.loads(await _run("api", _NODE_ENDPOINTS[kind] + node_id))
+    if kind == "page":
+        title = _title(obj)
+    elif kind == "database":
+        title = "".join(part.get("plain_text", "") for part in obj.get("title", [])).strip() or "(untitled)"
+    else:
+        title = ""
+    parent_kind, parent_id = _parent(obj)
+    return Node(node_id, kind, title, parent_kind, parent_id)
 
 
 async def get_markdown(page_id: str) -> str:

@@ -10,7 +10,9 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .ntn import Page
+from .ntn import Node, Page
+
+MAX_DEPTH = 12  # guard against cycles or absurdly deep trees
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages (
@@ -27,6 +29,16 @@ CREATE TABLE IF NOT EXISTS page_content (
     markdown         TEXT NOT NULL,
     page_last_edited TEXT NOT NULL,  -- page's last_edited when this markdown was fetched
     fetched_at       REAL NOT NULL
+);
+
+-- Pages, databases, data sources and blocks seen as ancestors, for the breadcrumb path.
+CREATE TABLE IF NOT EXISTS nodes (
+    id          TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,  -- page | database | data_source | block
+    title       TEXT NOT NULL,  -- '' when the step has no name of its own
+    parent_kind TEXT NOT NULL,  -- 'workspace' at the top
+    parent_id   TEXT NOT NULL,
+    fetched_at  REAL NOT NULL
 );
 """
 
@@ -58,6 +70,34 @@ class Cache:
                 "url=excluded.url, seen_at=excluded.seen_at",
                 [(p.id, p.title, p.last_edited, p.url, now) for p in pages],
             )
+        self.put_nodes([Node(p.id, "page", p.title, p.parent_kind, p.parent_id) for p in pages if p.parent_kind])
+
+    def put_nodes(self, nodes: list[Node]) -> None:
+        now = time.time()
+        with self.db:
+            self.db.executemany(
+                "INSERT OR REPLACE INTO nodes (id, kind, title, parent_kind, parent_id, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [(n.id, n.kind, n.title, n.parent_kind, n.parent_id, now) for n in nodes],
+            )
+
+    def ancestry(self, page_id: str) -> tuple[list[str], tuple[str, str] | None]:
+        """Titles of the page's ancestors, top first, and the first (kind, id) not cached yet (None if complete).
+
+        When something is missing, the titles are only the cached part just above the page.
+        """
+        titles: list[str] = []
+        kind, node_id = "page", page_id  # start at the page itself: its row holds its parent
+        for depth in range(MAX_DEPTH):
+            row = self.db.execute("SELECT title, parent_kind, parent_id FROM nodes WHERE id = ?", (node_id,)).fetchone()
+            if row is None:
+                return titles[::-1], (kind, node_id)
+            title, kind, node_id = row
+            if depth and title:
+                titles.append(title)
+            if kind == "workspace" or not node_id:
+                break
+        return titles[::-1], None
 
     def content(self, page_id: str) -> tuple[str, str] | None:
         """(markdown, page_last_edited) or None."""
@@ -85,3 +125,4 @@ class Cache:
         with self.db:
             self.db.execute("DELETE FROM page_content WHERE page_id = ?", (page_id,))
             self.db.execute("DELETE FROM pages WHERE id = ?", (page_id,))
+            self.db.execute("DELETE FROM nodes WHERE id = ?", (page_id,))

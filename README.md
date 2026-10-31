@@ -1,7 +1,8 @@
 # notion-tui
 
 Terminal UI for Notion, built on the [`ntn`](https://developers.notion.com) CLI.
-Layout: page list on the left, Markdown preview on the right.
+Layout: page list on the left, Markdown preview on the right. The preview's top line
+shows the page's path, e.g. `Notes / Quick Notes` (cut from the left with `…` when long).
 
 ## Run
 
@@ -24,7 +25,7 @@ Needs `ntn` on `PATH` and logged in (`NOTION_API_TOKEN` set for `ntn pages`).
 | `e`            | edit page in `$EDITOR` (`ntn pages edit`)|
 | `n`            | new page in `$EDITOR` (`ntn pages create`)|
 | `d`            | trash page (asks first)                  |
-| `o`            | open page in browser                     |
+| `o`            | open page in Notion web app (browser)    |
 | `r`            | refresh                                  |
 | `?`            | help panel                               |
 | `q`            | quit                                     |
@@ -37,3 +38,5 @@ Needs `ntn` on `PATH` and logged in (`NOTION_API_TOKEN` set for `ntn pages`).
 - SQLite cache at `~/.cache/notion-tui/cache.db` (`pages`, `page_content`) makes startup
   instant and previews appear before Notion answers. A cached preview is reused while the
   page's `last_edited` is unchanged. The row below the cursor is prefetched.
+- The path comes from each page's parent. Parents are cached in the `nodes` table; missing ones
+  are fetched once with `ntn api v1/pages|databases|data_sources|blocks/<id>`.
