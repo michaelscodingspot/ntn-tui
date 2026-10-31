@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import re
-import subprocess
-import webbrowser
 from datetime import datetime
 
 from rich.text import Text
@@ -18,7 +16,7 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Button, Footer, Input, Label, ListItem, ListView, Markdown, Static
 
-from . import ntn
+from . import desktop, ntn
 from .cache import MAX_DEPTH, Cache
 from .ntn import NtnError, Page
 
@@ -466,18 +464,16 @@ class NotionTUI(App):
         self.notify(f"Trashed “{page.title}”")
 
     def action_browser(self) -> None:
-        if not (self.current and self.current.url):
+        page = self.current
+        if not (page and page.url):
             return
-        try:
-            subprocess.Popen(
-                ["xdg-open", self.current.url],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except FileNotFoundError:
-            webbrowser.open(self.current.url)
+        desktop.open_url(page.url)
+        self.raise_browser(page)
+
+    @work(exclusive=True, group="raise")
+    async def raise_browser(self, page: Page) -> None:
+        """Bring the browser window showing the page to the front (GNOME Window Calls extension)."""
+        await desktop.raise_page_window(page.title)
 
     def action_help(self) -> None:
         if self.screen.query("HelpPanel"):

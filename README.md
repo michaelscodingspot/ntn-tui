@@ -25,7 +25,7 @@ Needs `ntn` on `PATH` and logged in (`NOTION_API_TOKEN` set for `ntn pages`).
 | `e`            | edit page in `$EDITOR` (`ntn pages edit`)|
 | `n`            | new page in `$EDITOR` (`ntn pages create`)|
 | `d`            | trash page (asks first)                  |
-| `o`            | open page in Notion web app (browser)    |
+| `o`            | open page in Notion web app, focus tab   |
 | `r`            | refresh                                  |
 | `?`            | help panel                               |
 | `q`            | quit                                     |
@@ -40,3 +40,6 @@ Needs `ntn` on `PATH` and logged in (`NOTION_API_TOKEN` set for `ntn pages`).
   page's `last_edited` is unchanged. The row below the cursor is prefetched.
 - The path comes from each page's parent. Parents are cached in the `nodes` table; missing ones
   are fetched once with `ntn api v1/pages|databases|data_sources|blocks/<id>`.
+- `o` raises the browser window through the GNOME Shell "Window Calls" extension
+  (D-Bus `org.gnome.Shell.Extensions.Windows`), since GNOME on Wayland blocks focus
+  requests from background apps. Without the extension the page opens unfocused.
