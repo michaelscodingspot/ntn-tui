@@ -2,7 +2,7 @@
 
 Terminal UI for Notion, built on the [`ntn`](https://developers.notion.com) CLI.
 Layout: page list on the left, Markdown preview on the right. The preview's top line
-shows the page's path, e.g. `Notes / Quick Notes` (cut from the left with `…` when long).
+shows the page's path, e.g. `Notes / Quick Notes`.
 Databases are listed too (marked `▦`); their preview is a table of the first 100 rows.
 Edit and trash work on pages only.
 
@@ -12,17 +12,15 @@ Edit and trash work on pages only.
 |---|---|
 | ![Database shown as a table](docs/screenshots/database.png) | ![Search results](docs/screenshots/search.png) |
 
-_Screenshots use a demo workspace._
-
 ## Run
 
 ```
 uv run notion-tui
 ```
 
-Needs `ntn` on `PATH` and logged in (`NOTION_API_TOKEN` set for `ntn pages`).
+Needs `ntn` on `PATH` and logged in (or `NOTION_API_TOKEN` set for `ntn pages`).
 
-## Keys
+## Shortcut Keys
 
 | Key            | Action                                   |
 |----------------|------------------------------------------|
