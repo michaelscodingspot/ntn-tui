@@ -20,6 +20,17 @@ uv run notion-tui
 
 Needs `ntn` on `PATH` and logged in (or `NOTION_API_TOKEN` set for `ntn pages`).
 
+## Platforms
+
+| Platform | Status                                                         |
+|----------|----------------------------------------------------------------|
+| Linux    | Supported and tested (GNOME on Wayland)                        |
+| macOS    | Should work, untested. `o` opens the page but can't focus it   |
+| Windows  | Not supported                                                  |
+
+Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
+(see [How it works](#how-it-works)). Elsewhere the page opens in the background.
+
 ## Shortcut Keys
 
 | Key            | Action                                   |
