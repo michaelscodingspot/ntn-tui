@@ -1,7 +1,7 @@
 [project]
 name = "notion-tui"
 version = "0.1.0"
-description = "Add your description here"
+description = "Terminal UI for Notion, built on the ntn CLI: page list, search, Markdown preview, edit in $EDITOR"
 authors = [
     { name = "Michael Shpilt", email = "contact@obics.io" }
 ]
