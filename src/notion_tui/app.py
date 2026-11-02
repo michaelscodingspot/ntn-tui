@@ -18,6 +18,7 @@ from textual.widget import Widget
 from textual.widgets import Button, Footer, Input, Label, ListItem, ListView, Markdown, RadioButton, RadioSet, Static
 
 from . import desktop, ntn
+from .bidi import BidiMarkdown
 from .cache import MAX_DEPTH, Cache
 from .ntn import NtnError, Page
 from .options import DATABASE_ENTRIES, Options
@@ -290,7 +291,7 @@ class NotionTUI(App):
             with Vertical(id="preview-pane"):
                 yield Breadcrumb(id="crumbs")
                 with PreviewScroll():
-                    yield Markdown("", id="preview")
+                    yield BidiMarkdown("", id="preview")
         yield Footer()
 
     async def on_mount(self) -> None:
