@@ -57,9 +57,9 @@ def split_page(md: str, title: str) -> tuple[list[tuple[str, str]], str]:
 
 
 # System columns that only add width to a database preview.
-_HIDDEN_COLUMN_TYPES = {"created_time", "last_edited_time", "created_by", "last_edited_by", "relation", "rollup", "files", "button", "unique_id"}
 # Columns a view may show that the preview can't render as text.
 _UNRENDERED_TYPES = {"created_by", "last_edited_by", "relation", "rollup", "files", "button"}
+_HIDDEN_COLUMN_TYPES = _UNRENDERED_TYPES | {"created_time", "last_edited_time", "unique_id"}
 # View types with no rows to show. Other non-table views (board, calendar, …) are shown as a table.
 SKIPPED_VIEW_TYPES = {"form", "chart", "dashboard"}
 
@@ -111,14 +111,18 @@ def view_columns(view: View | None, schema: list[dict] | None) -> list[str] | No
     return names
 
 
+def sort_level_name(level: dict, schema: list[dict] | None) -> str:
+    """The property (or timestamp) one sort level sorts by."""
+    if "property" not in level:
+        return level.get("timestamp", "?").replace("_", " ")
+    return next((p["name"].strip() for p in schema or [] if p["id"] == level["property"]), level["property"])
+
+
 def sort_label(sorts: list | None, schema: list[dict] | None) -> str:
     """ "Priority ↑, Due date ↓" for a sorts list."""
-    names = {p["id"]: p["name"].strip() for p in schema or []}
-    parts = []
-    for level in sorts or []:
-        name = names.get(level.get("property"), level.get("property")) if "property" in level else level.get("timestamp", "?").replace("_", " ")
-        parts.append(f"{name} {'↓' if level.get('direction') == 'descending' else '↑'}")
-    return ", ".join(parts)
+    return ", ".join(
+        f"{sort_level_name(level, schema)} {'↓' if level.get('direction') == 'descending' else '↑'}" for level in sorts or []
+    )
 
 
 def view_label(view: View) -> str:
@@ -149,6 +153,8 @@ class DbRows:
     rows: list[dict] = field(default_factory=list)
     cursor: str | None = None
     columns: list[str] | None = None
+    filter: dict | None = None  # what page 1 was queried with; later pages must ask the same
+    sorts: list | None = None
 
 
 def people_names(rows: list[dict]) -> dict[str, str]:
@@ -397,8 +403,8 @@ class SortScreen(ModalScreen[list | None]):
         await self._render_levels(0)
 
     def _label(self, i: int, level: dict) -> str:
-        name = sort_label([level], self.schema)
-        return f"{i + 1}. {name[:-2]}  {'↓ descending' if level.get('direction') == 'descending' else '↑ ascending'}"
+        name = sort_level_name(level, self.schema)
+        return f"{i + 1}. {name}  {'↓ descending' if level.get('direction') == 'descending' else '↑ ascending'}"
 
     async def _render_levels(self, index: int) -> None:
         pick = self.query_one(PickList)
@@ -518,6 +524,7 @@ class NotionTUI(App):
         self._search_timer: Timer | None = None
         self.db_rows: DbRows | None = None  # rows of the database being previewed
         self._meta_fresh: set[str] = set()  # data sources whose views and schema were fetched this session
+        self._people: dict[str, dict[str, str]] = {}  # data source → person name → user ID, seen in its rows
 
     # ---------- layout ----------
 
@@ -786,22 +793,33 @@ class NotionTUI(App):
 
     def _db_request(self, data_source_id: str) -> DbRequest:
         """The current view, query line and sort override of a database (from the cache), as a query."""
-        views = [v for v in self.cache.views(data_source_id) if v.type not in SKIPPED_VIEW_TYPES]
+        views = self.cache.views(data_source_id)
         schema = self.cache.schema(data_source_id)
         view_id, query_text, sorts_override = self.cache.db_state(data_source_id)
         view = next((v for v in views if v.id == view_id), views[0] if views else None)
         req = DbRequest(views if views or schema is not None else None, schema, view, query_text, sorts_override)
-        filters: list[dict] = []
+        req.filter = view.filter if view else None
         if query_text and schema is not None:
-            rows = self.db_rows.rows if self.db_rows and self.db_rows.page_id == data_source_id else []
             try:
-                filters = query.parse(query_text, schema, people_names(rows))
+                req.filter = self._query_filter(data_source_id, query_text, schema, view)
             except query.QueryError as err:
                 req.error = f"query not applied: {err}"
-        req.filter = query.combine(view.filter if view else None, filters)
         req.sorts = sorts_override if sorts_override is not None else (view.sorts if view else None)
         req.columns = view_columns(view, schema)
         return req
+
+    def _query_filter(self, data_source_id: str, text: str, schema: list[dict], view: View | None) -> dict | None:
+        """The view's filter AND the query line, as one Notion filter. Raises QueryError."""
+        filters = query.parse(text, schema, self._people.get(data_source_id))
+        return query.combine(view.filter if view else None, filters)
+
+    def _learn_people(self, data_source_id: str, rows: list[dict]) -> None:
+        self._people.setdefault(data_source_id, {}).update(people_names(rows))
+
+    def _current_rows(self) -> DbRows | None:
+        """The loaded rows, when they belong to the database being previewed."""
+        rows = self.db_rows
+        return rows if rows and self.current and rows.page_id == self.current.id else None
 
     def _save_db_state(self, data_source_id: str, **changes) -> None:
         view_id, query_text, sorts = self.cache.db_state(data_source_id)
@@ -816,14 +834,22 @@ class NotionTUI(App):
             async with limit:
                 return await ntn.get_view(view_id)
 
-        schema = await ntn.get_schema(data_source_id)
-        try:
-            views = list(await asyncio.gather(*(view(i) for i in await ntn.list_view_ids(data_source_id))))
-        except NtnError:
-            views = []  # no access to views: show the plain table
-        changed = schema != self.cache.schema(data_source_id) or views != self.cache.views(data_source_id)
-        self.cache.put_schema(data_source_id, schema)
-        self.cache.put_views(data_source_id, views)
+        async def views() -> list[View]:
+            try:
+                found = await asyncio.gather(*(view(i) for i in await ntn.list_view_ids(data_source_id)))
+            except NtnError:
+                # No access to views, or a passing error: keep what's cached (none = the plain table).
+                return self.cache.views(data_source_id)
+            return [v for v in found if v.type not in SKIPPED_VIEW_TYPES]
+
+        schema, fetched = await asyncio.gather(ntn.get_schema(data_source_id), views())
+        changed = False
+        if schema != self.cache.schema(data_source_id):
+            self.cache.put_schema(data_source_id, schema)
+            changed = True
+        if fetched != self.cache.views(data_source_id):
+            self.cache.put_views(data_source_id, fetched)
+            changed = True
         self._meta_fresh.add(data_source_id)
         return changed
 
@@ -833,8 +859,14 @@ class NotionTUI(App):
             await self._fetch_meta(page.id)
         req = self._db_request(page.id)
         rows, cursor = await ntn.query_rows(page.id, req.filter, req.sorts)
+        self._learn_people(page.id, rows)
+        if req.error:  # a saved people term may parse now that these rows named the people
+            retry = self._db_request(page.id)
+            if not retry.error:
+                req = retry
+                rows, cursor = await ntn.query_rows(page.id, req.filter, req.sorts)
         if self.current and self.current.id == page.id:
-            self.db_rows = DbRows(page.id, rows, cursor, req.columns)
+            self.db_rows = DbRows(page.id, rows, cursor, req.columns, req.filter, req.sorts)
         return rows_markdown(rows, cursor is not None, req.columns)
 
     @work(exclusive=True, group="dbmeta")
@@ -860,8 +892,8 @@ class NotionTUI(App):
         page = self.current
         if page is None:
             return
-        if self.db_rows and self.db_rows.page_id == page.id:
-            self.db_rows.cursor = None
+        if rows := self._current_rows():
+            rows.cursor = None
         self.query_one("#preview-pane").border_subtitle = "refreshing…"
         self._render_db_bar(loading=True)
         self.fetch_preview(page)
@@ -870,7 +902,7 @@ class NotionTUI(App):
         """The database toolbar: view tabs, then query · sort · row count."""
         tabs, info = self.query_one("#dbtabs", Static), self.query_one("#dbinfo", Static)
         page = self.current
-        if page is None or page.kind != "data_source":
+        if not self._is_db():
             for widget in (tabs, info, self.query_one("#dbquery"), self.query_one("#dberror")):
                 widget.display = False
             return
@@ -896,7 +928,7 @@ class NotionTUI(App):
             parts.append(f"sort: {sort_label(req.sorts, req.schema) or 'none'} (custom)")
         else:
             parts.append(f"sort: {sort_label(req.sorts, req.schema)}" if req.sorts else "unsorted")
-        rows = self.db_rows if self.db_rows and self.db_rows.page_id == page.id else None
+        rows = self._current_rows()
         if rows is None or loading:
             parts.append("loading…")
         else:
@@ -915,8 +947,8 @@ class NotionTUI(App):
             if not self._is_db():
                 return False
             if action == "db_more":
-                rows = self.db_rows
-                return bool(rows and self.current and rows.page_id == self.current.id and rows.cursor)
+                rows = self._current_rows()
+                return bool(rows and rows.cursor)
         return True
 
     def action_db_view(self, step: int) -> None:
@@ -947,16 +979,15 @@ class NotionTUI(App):
 
     def _apply_db_query(self, text: str) -> None:
         page = self.current
-        if page is None or page.kind != "data_source":
+        if not self._is_db():
             self._close_db_query()
             return
-        schema = self.cache.schema(page.id)
-        if text and schema is None:
+        req = self._db_request(page.id)
+        if text and req.schema is None:
             self._show_db_error("The database's properties aren't loaded yet; try again in a moment.")
             return
-        rows = self.db_rows.rows if self.db_rows and self.db_rows.page_id == page.id else []
         try:
-            query.parse(text, schema or [], people_names(rows))
+            self._query_filter(page.id, text, req.schema or [], req.view)
         except query.QueryError as err:
             self._show_db_error(str(err))
             return
@@ -989,8 +1020,8 @@ class NotionTUI(App):
         self._reload_db()
 
     def action_db_more(self) -> None:
-        rows = self.db_rows
-        if self._is_db() and rows and rows.page_id == self.current.id and rows.cursor:
+        rows = self._current_rows()
+        if rows and rows.cursor:
             self.load_more_rows(self.current)
 
     @work(exclusive=True, group="preview")
@@ -1000,15 +1031,15 @@ class NotionTUI(App):
         if not (rows and rows.page_id == page.id and rows.cursor):
             return
         self.query_one("#preview-pane").border_subtitle = "loading more rows…"
-        req = self._db_request(page.id)
         try:
-            more, cursor = await ntn.query_rows(page.id, req.filter, req.sorts, start_cursor=rows.cursor)
+            more, cursor = await ntn.query_rows(page.id, rows.filter, rows.sorts, start_cursor=rows.cursor)
         except NtnError as err:
             self.query_one("#preview-pane").border_subtitle = ""
             self.notify(str(err), title="Could not load more rows", severity="error")
             return
         if not (self.current and self.current.id == page.id and self.db_rows is rows):
             return
+        self._learn_people(page.id, more)
         rows.rows += more
         rows.cursor = cursor
         markdown = rows_markdown(rows.rows, cursor is not None, rows.columns)
@@ -1027,6 +1058,8 @@ class NotionTUI(App):
 
     @work(exclusive=True, group="prefetch")
     async def prefetch(self, page: Page) -> None:
+        if page.kind == "data_source" and self.cache.schema(page.id) is None:
+            return  # a first look at a database costs a call per view: leave it to the real fetch
         try:
             self.cache.put_content(page, await self._fetch_content(page))
             await self._complete_path(page)

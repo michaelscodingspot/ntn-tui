@@ -158,3 +158,31 @@ def test_combine():
     assert combine(view, [term]) == {"and": [view, term]}
     assert combine({"and": [view]}, [term]) == {"and": [view, term]}
     assert combine({"or": [view, term]}, [term]) == {"and": [{"or": [view, term]}, term]}
+
+
+def test_property_word_and_substring_match():
+    assert parse("created>=2026", SCHEMA) == [{"property": "'Y6<", "created_time": {"on_or_after": "2026-01-01"}}]
+    assert parse("sign:x", SCHEMA, {"x": "u9"}) == [{"property": "who", "people": {"contains": "u9"}}]  # Assignee
+    with pytest.raises(QueryError, match="ambiguous"):
+        parse("ate:2024", SCHEMA)  # substring of Due date and Date Created
+
+
+def test_comma_dates_merge_and_nesting():
+    # back-to-back periods become one range: no nested or/and
+    assert parse("due:2024-01,2024-02", SCHEMA) == [
+        {"property": "=cGt", "date": {"on_or_after": "2024-01-01"}},
+        {"property": "=cGt", "date": {"before": "2024-03-01"}},
+    ]
+    alone = parse("due:2024,2026", SCHEMA)
+    assert combine(None, alone) == alone[0]  # or → and: two levels, fine on its own
+    with pytest.raises(QueryError, match="too complex"):
+        combine(None, parse("due:2024,2026 area:work", SCHEMA))
+    with pytest.raises(QueryError, match="too complex"):
+        combine({"property": "x", "checkbox": {"equals": True}}, alone)
+
+
+def test_combine_rejects_deep_view_filter_plus_terms():
+    deep = {"or": [{"and": [{"property": "a", "checkbox": {"equals": True}}]}, {"property": "b", "checkbox": {"equals": True}}]}
+    assert combine(deep, []) == deep
+    with pytest.raises(QueryError, match="too complex"):
+        combine(deep, parse("milk", SCHEMA))

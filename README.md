@@ -81,11 +81,14 @@ Space-separated terms, all of which must match. `-` in front negates a term.
 | `prop<v` `prop>=v`| number or date compare (`<` `>` `<=` `>=`)                 |
 | `-prop:a`         | not a                                                      |
 
-- Property names ignore case and may be cut to an unambiguous start: `pri:1`.
+- Property names ignore case and may be cut to any unambiguous part: `pri:1`, or
+  `created>=2026` for "Date Created" (start, then start of a word, then anywhere in it).
 - Dates are `YYYY`, `YYYY-MM` or `YYYY-MM-DD`; `due=2024-03` is the whole month,
-  `due<=2024` is up to the end of 2024.
+  `due<=2024` is up to the end of 2024. Back-to-back dates join (`due:2024-01,2024-02`);
+  separate ones (`due:2024,2026`) must be the only term on a view with no filter, since
+  Notion nests and/or only two levels deep.
 - Names or values with spaces go in double quotes: `"due date">=2024 area:"side project"`.
-- People are matched by name, from the people seen in the rows already shown.
+- People are matched by name, from the people seen in the database's rows this session.
 - The filter is added to the view's own filter (AND). A mistake shows a message under the
   line and nothing is sent.
 

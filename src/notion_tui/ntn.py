@@ -13,7 +13,7 @@ import subprocess
 from dataclasses import dataclass
 from urllib.parse import unquote
 
-from .query import combine
+from .query import QueryError, combine
 
 NTN = shutil.which("ntn") or "ntn"
 
@@ -185,15 +185,19 @@ async def list_view_ids(data_source_id: str) -> list[str]:
 
 
 async def get_view(view_id: str) -> View:
-    obj = json.loads(await _run("api", f"v1/views/{view_id}"))
+    obj = json.loads(await _run("api", f"v1/views/{view_id}", "-X", "GET"))
     config = obj.get("configuration") or {}
     # Quick filters (the filter pills under a view's tabs) narrow the view too: AND them in.
     quick = [{"property": prop_id, **condition} for prop_id, condition in (obj.get("quick_filters") or {}).items()]
+    try:
+        view_filter = combine(obj.get("filter") or None, quick)
+    except QueryError:
+        view_filter = obj.get("filter") or None  # too deep for Notion with the quick filters ANDed in
     return View(
         id=obj.get("id", view_id),
         name=obj.get("name") or "",
         type=obj.get("type") or "table",
-        filter=combine(obj.get("filter") or None, quick),
+        filter=view_filter,
         sorts=obj.get("sorts") or None,
         columns=config.get("properties") or None,
         last_edited=obj.get("last_edited_time", ""),
@@ -202,7 +206,7 @@ async def get_view(view_id: str) -> View:
 
 async def get_schema(data_source_id: str) -> list[dict]:
     """A data source's properties: [{id, name, type, options}], title first."""
-    obj = json.loads(await _run("api", f"v1/data_sources/{data_source_id}"))
+    obj = json.loads(await _run("api", f"v1/data_sources/{data_source_id}", "-X", "GET"))
     props = []
     for name, prop in (obj.get("properties") or {}).items():
         kind = prop.get("type", "")

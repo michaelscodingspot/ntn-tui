@@ -10,7 +10,8 @@ Syntax: space-separated terms, all of which must match (AND). A leading `-` nega
                   number and date comparisons; dates are YYYY, YYYY-MM or YYYY-MM-DD
     word          title contains word
 
-Property names are case-insensitive and may be shortened to an unambiguous prefix.
+Property names are case-insensitive and may be shortened to any unambiguous part
+(a prefix, the start of a word, or a substring): "created" finds "Date Created".
 Names or values with spaces (or with : ~ < > = ,) go in double quotes: "due date">=2024 area:"side project".
 """
 
@@ -24,6 +25,8 @@ CHOICES = {"select", "status", "multi_select"}
 OPERATORS = ("<=", ">=", ":", "~", "<", ">", "=")
 _TRUE = {"yes", "true", "1", "checked", "y", "x"}
 _FALSE = {"no", "false", "0", "unchecked", "n"}
+_NEGATE = {"<": ">=", "<=": ">", ">": "<=", ">=": "<"}  # a negated comparison flips
+MAX_NESTING = 2  # Notion accepts and/or nested at most two levels deep
 
 
 class QueryError(ValueError):
@@ -90,32 +93,45 @@ def split_term(token: str) -> tuple[bool, str | None, str | None, str]:
     return negated, None, None, body
 
 
+def _match(needle: str, names: list[str]) -> tuple[int | None, list[int]]:
+    """Index of the one name `needle` picks, else (None, the tied indexes).
+
+    Case-insensitive, tried in order: exact, prefix, prefix of a word, substring. The first
+    tier with any hit decides: one hit wins, several are ambiguous.
+    """
+    needle = needle.strip().lower()
+    keys = [n.strip().lower() for n in names]
+    tiers = (
+        lambda k: k == needle,
+        lambda k: k.startswith(needle),
+        lambda k: any(w.startswith(needle) for w in k.split()),
+        lambda k: needle in k,
+    )
+    for hit in tiers:
+        found = [i for i, k in enumerate(keys) if hit(k)]
+        if found:
+            return (found[0], []) if len(found) == 1 or hit is tiers[0] else (None, found)
+    return None, []
+
+
 def find_property(name: str, properties: list[dict]) -> dict:
-    """Case-insensitive exact match, else an unambiguous prefix."""
-    needle = name.strip().lower()
-    exact = [p for p in properties if p["name"].strip().lower() == needle]
-    if exact:
-        return exact[0]
-    prefixed = [p for p in properties if p["name"].strip().lower().startswith(needle)]
-    if len(prefixed) == 1:
-        return prefixed[0]
-    if prefixed:
-        names = ", ".join(p["name"].strip() for p in prefixed)
-        raise QueryError(f"property {name!r} is ambiguous: {names}")
+    """Case-insensitive exact match, else an unambiguous prefix, word prefix or substring."""
+    names = [p["name"] for p in properties]
+    index, tied = _match(name, names)
+    if index is not None:
+        return properties[index]
+    if tied:
+        raise QueryError(f"property {name!r} is ambiguous: {', '.join(names[i].strip() for i in tied)}")
     raise QueryError(f"no property {name!r} (quote text that contains : ~ < > =)")
 
 
 def _find_option(value: str, options: list[str], prop: dict) -> str:
-    needle = value.strip().lower()
-    exact = [o for o in options if o.strip().lower() == needle]
-    if exact:
-        return exact[0]
-    prefixed = [o for o in options if o.strip().lower().startswith(needle)]
-    if len(prefixed) == 1:
-        return prefixed[0]
+    index, tied = _match(value, options)
+    if index is not None:
+        return options[index]
     label = prop["name"].strip()
-    if prefixed:
-        raise QueryError(f"{value!r} is ambiguous for {label}: {', '.join(o.strip() for o in prefixed)}")
+    if tied:
+        raise QueryError(f"{value!r} is ambiguous for {label}: {', '.join(options[i].strip() for i in tied)}")
     shown = ", ".join(o.strip() for o in options) or "none"
     raise QueryError(f"{label} has no option {value!r} (options: {shown})")
 
@@ -147,6 +163,17 @@ def _number(value: str, prop: dict) -> float | int:
     return int(number) if number.is_integer() else number
 
 
+def _merge_periods(periods: list[tuple[date, date]]) -> list[tuple[date, date]]:
+    """Join overlapping or back-to-back periods, so 2024-01,2024-02 is one range."""
+    merged: list[tuple[date, date]] = []
+    for start, after in sorted(periods):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(after, merged[-1][1]))
+        else:
+            merged.append((start, after))
+    return merged
+
+
 def _cond(prop: dict, condition: dict) -> dict:
     return {"property": prop["id"], prop["type"]: condition}
 
@@ -156,10 +183,10 @@ def _any(filters: list[dict]) -> list[dict]:
     return filters if len(filters) == 1 else [{"or": filters}]
 
 
-def _date_term(prop: dict, op: str, value: str, negated: bool) -> list[dict]:
+def _date_term(prop: dict, op: str, period: tuple[date, date], negated: bool) -> list[dict]:
     if negated:
-        op = {"<": ">=", "<=": ">", ">": "<=", ">=": "<"}.get(op, op)
-    start, after = parse_date(value)
+        op = _NEGATE.get(op, op)
+    start, after = period
     lo, hi = start.isoformat(), after.isoformat()
     match op:
         case "<":
@@ -205,18 +232,22 @@ def _term(prop: dict, op: str, raw: str, negated: bool, people: dict[str, str]) 
             filters = [_cond(prop, {key: _number(v, prop)}) for v in values]
             return filters if negated else _any(filters)
         if negated:
-            op = {"<": ">=", "<=": ">", ">": "<=", ">=": "<"}[op]
+            op = _NEGATE[op]
         key = {"<": "less_than", "<=": "less_than_or_equal_to", ">": "greater_than", ">=": "greater_than_or_equal_to"}[op]
         return [_cond(prop, {key: _number(values[0], prop)})]
 
     if kind in DATES:
         if op == "~":
             raise unsupported()
-        if len(values) == 1:
-            return _date_term(prop, op, values[0], negated)
+        periods = [parse_date(v) for v in values]
+        if len(periods) == 1:
+            return _date_term(prop, op, periods[0], negated)
+        periods = _merge_periods(periods)
         if negated:  # outside every period
-            return [f for v in values for f in _date_term(prop, op, v, True)]
-        return [{"or": [{"and": _date_term(prop, op, v, False)} for v in values]}]
+            return [f for p in periods for f in _date_term(prop, op, p, True)]
+        if len(periods) == 1:
+            return _date_term(prop, op, periods[0], False)
+        return [{"or": [{"and": _date_term(prop, op, p, False)} for p in periods]}]
 
     if kind in CHOICES:
         if op not in (":", "="):
@@ -280,4 +311,18 @@ def combine(view_filter: dict | None, filters: list[dict]) -> dict | None:
     parts += filters
     if not parts:
         return None
-    return parts[0] if len(parts) == 1 else {"and": parts}
+    combined = parts[0] if len(parts) == 1 else {"and": parts}
+    if nesting(combined) > MAX_NESTING:
+        raise QueryError(
+            "too complex for Notion (and/or nest at most 2 deep): "
+            "comma-separated dates can't be mixed with other terms or a view filter"
+        )
+    return combined
+
+
+def nesting(filter: dict) -> int:
+    """How deep and/or compounds nest in a filter; a single condition is 0."""
+    for key in ("and", "or"):
+        if key in filter:
+            return 1 + max((nesting(f) for f in filter[key]), default=0)
+    return 0
