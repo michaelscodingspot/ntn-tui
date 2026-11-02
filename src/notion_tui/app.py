@@ -18,6 +18,7 @@ from textual.widget import Widget
 from textual.widgets import Button, Footer, Input, Label, ListItem, ListView, Markdown, RadioButton, RadioSet, Static
 
 from . import desktop, ntn
+from .bidi import BidiMarkdown, BidiMixin
 from .cache import MAX_DEPTH, Cache
 from .ntn import NtnError, Page
 from .options import DATABASE_ENTRIES, Options
@@ -92,6 +93,10 @@ def long_date(iso: str) -> str:
     return dt.strftime("%Y-%m-%d %H:%M") if dt else "unknown"
 
 
+class TitleLabel(BidiMixin, Label):
+    BIDI_ALIGN = False  # titles stay left-aligned in the list
+
+
 class PageItem(ListItem):
     def __init__(self, page: Page) -> None:
         super().__init__()
@@ -99,13 +104,19 @@ class PageItem(ListItem):
 
     def compose(self) -> ComposeResult:
         marker = "▦ " if self.page.kind == "data_source" else ""
-        yield Label(marker + self.page.title, classes="title", markup=False)
+        label = TitleLabel(marker + self.page.title, classes="title", markup=False)
+        label.bidi_head = len(marker)
+        yield label
 
 
-class Breadcrumb(Widget):
+class Breadcrumb(BidiMixin, Widget):
     """One line: "Notes / Quick Notes". When too long, the start is cut and replaced by "…"."""
 
     parts: reactive[tuple[str, ...]] = reactive(())
+    BIDI_ALIGN = False
+
+    def bidi_text(self) -> str:
+        return " / ".join(self.parts)
 
     def render(self) -> Text:
         text = Text(no_wrap=True)
@@ -290,7 +301,7 @@ class NotionTUI(App):
             with Vertical(id="preview-pane"):
                 yield Breadcrumb(id="crumbs")
                 with PreviewScroll():
-                    yield Markdown("", id="preview")
+                    yield BidiMarkdown("", id="preview")
         yield Footer()
 
     async def on_mount(self) -> None:

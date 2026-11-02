@@ -68,6 +68,9 @@ the hidden ones.
   databases), `ntn api v1/data_sources/<id>/query` for database rows,
   `ntn pages get/edit/create/trash` for page actions.
 - Calls run in the background; the screen never waits on Notion.
+- Right-to-left text (Hebrew, Arabic): most terminals draw cells strictly left to right, so
+  each rendered line is reordered into visual order (Unicode bidi algorithm) after wrapping.
+  RTL paragraphs in the preview are right-aligned; list titles stay left-aligned.
 - SQLite cache at `~/.cache/notion-tui/cache.db` (`pages`, `page_content`) makes startup
   instant and previews appear before Notion answers. A cached preview is reused while the
   page's `last_edited` is unchanged. The row below the cursor is prefetched.
