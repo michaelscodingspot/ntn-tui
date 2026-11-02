@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from rich.text import Text
@@ -17,16 +18,17 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Button, Footer, Input, Label, ListItem, ListView, Markdown, RadioButton, RadioSet, Static
 
-from . import desktop, ntn
+from . import desktop, ntn, query
 from .bidi import BidiMarkdown
 from .cache import MAX_DEPTH, Cache
-from .ntn import NtnError, Page
+from .ntn import NtnError, Page, View
 from .options import DATABASE_ENTRIES, Options
 
 PREVIEW_DEBOUNCE = 0.12  # seconds to wait after the cursor stops before loading a preview
 SEARCH_DEBOUNCE = 0.4  # seconds to wait after typing stops before asking Notion
 LOAD_MORE_MARGIN = 5  # fetch the next batch when the cursor is this close to the end
 BODY_CHECKS = 2  # parallel ntn calls when checking which database entries have content
+VIEW_FETCHES = 2  # parallel ntn calls when fetching a database's views
 
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _PROPERTY = re.compile(r"^'?([^':][^:]*?)'?:\s*(.*)$")
@@ -56,20 +58,36 @@ def split_page(md: str, title: str) -> tuple[list[tuple[str, str]], str]:
 
 # System columns that only add width to a database preview.
 _HIDDEN_COLUMN_TYPES = {"created_time", "last_edited_time", "created_by", "last_edited_by", "relation", "rollup", "files", "button", "unique_id"}
+# Columns a view may show that the preview can't render as text.
+_UNRENDERED_TYPES = {"created_by", "last_edited_by", "relation", "rollup", "files", "button"}
+# View types with no rows to show. Other non-table views (board, calendar, …) are shown as a table.
+SKIPPED_VIEW_TYPES = {"form", "chart", "dashboard"}
 
 
-def rows_markdown(rows: list[dict], has_more: bool) -> str:
-    """A database's rows as a Markdown table: the title column first, then non-empty columns."""
+def rows_markdown(rows: list[dict], has_more: bool, columns: list[str] | None = None) -> str:
+    """A database's rows as a Markdown table.
+
+    Without `columns`: the title column first, then non-empty columns. With `columns` (a view's
+    visible columns, in its order): those columns, minus ones that can't be shown as text.
+    """
     if not rows:
         return "_(no rows)_"
-    columns: list[str] = []
-    for row in rows:
-        for name, prop in row.get("properties", {}).items():
-            if name not in columns and prop.get("type") not in _HIDDEN_COLUMN_TYPES:
-                columns.append(name)
-    columns.sort(key=lambda name: rows[0]["properties"].get(name, {}).get("type") != "title")
+    if columns is None:
+        columns = []
+        for row in rows:
+            for name, prop in row.get("properties", {}).items():
+                if name not in columns and prop.get("type") not in _HIDDEN_COLUMN_TYPES:
+                    columns.append(name)
+        columns.sort(key=lambda name: rows[0]["properties"].get(name, {}).get("type") != "title")
+        drop_empty = True
+    else:
+        types = {name: prop.get("type") for row in rows[:1] for name, prop in row.get("properties", {}).items()}
+        columns = [c for c in columns if c in types and types[c] not in _UNRENDERED_TYPES]
+        drop_empty = False
+    if not columns:
+        return "_(no columns to show)_"
     cells = [[ntn.value_text(row["properties"][c]) if c in row["properties"] else "" for c in columns] for row in rows]
-    keep = [i for i, c in enumerate(columns) if i == 0 or any(r[i] for r in cells)]
+    keep = [i for i, c in enumerate(columns) if i == 0 or not drop_empty or any(r[i] for r in cells)]
 
     def line(values: list[str]) -> str:
         return "| " + " | ".join(v.replace("|", "\\|").replace("\n", " ") for v in values) + " |"
@@ -77,8 +95,72 @@ def rows_markdown(rows: list[dict], has_more: bool) -> str:
     out = [line([columns[i].strip() for i in keep]), "|" + "---|" * len(keep)]
     out += [line([r[i] for i in keep]) for r in cells]
     if has_more:
-        out.append(f"\n_First {len(rows)} rows. Press o to see all in Notion._")
+        out.append(f"\n_{len(rows)} rows shown. Press m for more._")
     return "\n".join(out)
+
+
+def view_columns(view: View | None, schema: list[dict] | None) -> list[str] | None:
+    """Names of a view's visible columns in its order, title included; None = no column setup."""
+    if view is None or not view.columns or not schema:
+        return None
+    by_id = {p["id"]: p for p in schema}
+    names = [by_id[c["property_id"]]["name"] for c in view.columns if c.get("visible") and c.get("property_id") in by_id]
+    title = next((p["name"] for p in schema if p["type"] == "title"), None)
+    if title and title not in names:
+        names.insert(0, title)  # list and board views keep the title out of their column list
+    return names
+
+
+def sort_label(sorts: list | None, schema: list[dict] | None) -> str:
+    """ "Priority ↑, Due date ↓" for a sorts list."""
+    names = {p["id"]: p["name"].strip() for p in schema or []}
+    parts = []
+    for level in sorts or []:
+        name = names.get(level.get("property"), level.get("property")) if "property" in level else level.get("timestamp", "?").replace("_", " ")
+        parts.append(f"{name} {'↓' if level.get('direction') == 'descending' else '↑'}")
+    return ", ".join(parts)
+
+
+def view_label(view: View) -> str:
+    name = view.name.strip() or "untitled"
+    return name if view.type in ("table", "list") else f"{name} ({view.type})"
+
+
+@dataclass
+class DbRequest:
+    """What a database preview asks Notion for: the current view plus the query line and sort override."""
+
+    views: list[View] | None  # None = not fetched yet
+    schema: list[dict] | None
+    view: View | None
+    query_text: str
+    sorts_override: list | None
+    filter: dict | None = None
+    sorts: list | None = None
+    columns: list[str] | None = None
+    error: str = ""  # the saved query line no longer parses
+
+
+@dataclass
+class DbRows:
+    """Rows loaded for the database preview, for paging and the row count."""
+
+    page_id: str
+    rows: list[dict] = field(default_factory=list)
+    cursor: str | None = None
+    columns: list[str] | None = None
+
+
+def people_names(rows: list[dict]) -> dict[str, str]:
+    """Person name → user ID, from people properties of loaded rows (the query line filters people by name)."""
+    found: dict[str, str] = {}
+    for row in rows:
+        for prop in row.get("properties", {}).values():
+            if prop.get("type") == "people":
+                for person in prop.get("people") or []:
+                    if person.get("name") and person.get("id"):
+                        found[person["name"]] = person["id"]
+    return found
 
 
 def _local(iso: str) -> datetime | None:
@@ -229,6 +311,152 @@ class OptionsScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
+# Property types a database can be sorted by.
+_UNSORTABLE_TYPES = {"relation", "rollup", "files", "button"}
+
+
+class PickList(ListView):
+    BINDINGS = [
+        Binding("j", "cursor_down", "down", show=False),
+        Binding("k", "cursor_up", "up", show=False),
+    ]
+
+
+class PropertyPickScreen(ModalScreen[str | None]):
+    """Choose one property to sort by. Returns its ID."""
+
+    AUTO_FOCUS = "PickList"
+    BINDINGS = [Binding("escape,q", "cancel", "cancel")]
+    DEFAULT_CSS = """
+    PropertyPickScreen { align: center middle; }
+    #pick { width: 50; height: auto; max-height: 80%; padding: 1 2; border: round $accent; background: $surface; }
+    #pick PickList { height: auto; max-height: 20; background: transparent; }
+    #pick ListItem { padding: 0 1; }
+    #pick .hint { color: $text-muted; margin-top: 1; }
+    """
+
+    def __init__(self, properties: list[dict]) -> None:
+        super().__init__()
+        self.properties = properties
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="pick"):
+            yield PickList(*(ListItem(Label(Text.assemble(p["name"].strip(), (f"  {p['type']}", "dim")))) for p in self.properties))
+            yield Label("j/k move · enter choose · esc cancel", classes="hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#pick").border_title = "Sort by"
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        event.stop()
+        self.dismiss(self.properties[event.list_view.index or 0]["id"])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class SortScreen(ModalScreen[list | None]):
+    """Edit a database's sort levels. Returns the new sorts list, or None when cancelled."""
+
+    AUTO_FOCUS = "PickList"
+    BINDINGS = [
+        Binding("enter", "apply", "apply", priority=True),
+        Binding("escape,q", "cancel", "cancel"),
+        Binding("a,o", "add", "add"),
+        Binding("x,d", "remove", "remove"),
+        Binding("space,t", "flip", "flip"),
+        Binding("K", "move(-1)", "move up"),
+        Binding("J", "move(1)", "move down"),
+        Binding("c", "clear", "clear"),
+    ]
+    DEFAULT_CSS = """
+    SortScreen { align: center middle; }
+    #sort { width: 60; height: auto; padding: 1 2; border: round $accent; background: $surface; }
+    #sort PickList { height: auto; max-height: 12; background: transparent; }
+    #sort ListItem { padding: 0 1; }
+    #sort .empty { color: $text-muted; }
+    #sort .hint { color: $text-muted; margin-top: 1; }
+    """
+
+    def __init__(self, sorts: list, schema: list[dict]) -> None:
+        super().__init__()
+        self.levels = [dict(level) for level in sorts]
+        self.schema = schema
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="sort"):
+            yield PickList()
+            yield Label("(no sort: rows come in Notion's default order)", classes="empty")
+            yield Label(
+                "j/k move · a add · x remove · space flip ↑/↓\nJ/K move level down/up · c clear · enter apply · esc cancel",
+                classes="hint",
+            )
+
+    async def on_mount(self) -> None:
+        self.query_one("#sort").border_title = "Sort"
+        await self._render_levels(0)
+
+    def _label(self, i: int, level: dict) -> str:
+        name = sort_label([level], self.schema)
+        return f"{i + 1}. {name[:-2]}  {'↓ descending' if level.get('direction') == 'descending' else '↑ ascending'}"
+
+    async def _render_levels(self, index: int) -> None:
+        pick = self.query_one(PickList)
+        await pick.clear()
+        await pick.extend(ListItem(Label(self._label(i, level), markup=False)) for i, level in enumerate(self.levels))
+        self.query_one(".empty").display = not self.levels
+        if self.levels:
+            pick.index = max(0, min(index, len(self.levels) - 1))
+
+    def _index(self) -> int | None:
+        index = self.query_one(PickList).index
+        return index if self.levels and index is not None else None
+
+    def action_add(self) -> None:
+        used = {level.get("property") for level in self.levels}
+        choices = [p for p in self.schema if p["type"] not in _UNSORTABLE_TYPES and p["id"] not in used]
+        if not choices:
+            self.notify("No more properties to sort by.", severity="warning")
+            return
+
+        async def picked(prop_id: str | None) -> None:
+            if prop_id:
+                self.levels.append({"property": prop_id, "direction": "ascending"})
+                await self._render_levels(len(self.levels) - 1)
+
+        self.app.push_screen(PropertyPickScreen(choices), picked)
+
+    async def action_remove(self) -> None:
+        index = self._index()
+        if index is not None:
+            del self.levels[index]
+            await self._render_levels(index)
+
+    async def action_flip(self) -> None:
+        index = self._index()
+        if index is not None:
+            level = self.levels[index]
+            level["direction"] = "ascending" if level.get("direction") == "descending" else "descending"
+            await self._render_levels(index)
+
+    async def action_move(self, step: int) -> None:
+        index = self._index()
+        if index is None or not 0 <= index + step < len(self.levels):
+            return
+        self.levels[index], self.levels[index + step] = self.levels[index + step], self.levels[index]
+        await self._render_levels(index + step)
+
+    async def action_clear(self) -> None:
+        self.levels = []
+        await self._render_levels(0)
+
+    def action_apply(self) -> None:
+        self.dismiss(self.levels)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class NotionTUI(App):
     TITLE = "notion-tui"
     CSS = """
@@ -250,6 +478,10 @@ class NotionTUI(App):
     PageList:focus > PageItem.-highlight { background: $accent; color: $background; text-style: bold; }
     PageItem .title { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
     #preview { background: transparent; }
+    #dbtabs, #dbinfo, #dberror { height: 1; padding: 0 1; display: none; }
+    #dbinfo { color: $text-muted; margin-bottom: 1; }
+    #dberror { color: $error; margin-bottom: 1; }
+    #dbquery { height: 1; border: none; padding: 0 1; margin: 0 1; background: $boost; display: none; }
     """
 
     BINDINGS = [
@@ -260,6 +492,12 @@ class NotionTUI(App):
         Binding("o", "browser", "open in Notion"),
         Binding("r", "refresh", "refresh"),
         Binding("comma", "options", "options"),
+        Binding("left_square_bracket", "db_view(-1)", "prev view"),
+        Binding("right_square_bracket", "db_view(1)", "next view"),
+        Binding("f", "db_filter", "filter"),
+        Binding("s", "db_sort", "sort"),
+        Binding("F", "db_clear", "clear filter+sort"),
+        Binding("m", "db_more", "more rows"),
         Binding("escape", "back", "back", show=False),
         Binding("question_mark", "help", "help"),
         Binding("q", "quit", "quit"),
@@ -278,6 +516,8 @@ class NotionTUI(App):
         self._rendered_id: str | None = None
         self._preview_timer: Timer | None = None
         self._search_timer: Timer | None = None
+        self.db_rows: DbRows | None = None  # rows of the database being previewed
+        self._meta_fresh: set[str] = set()  # data sources whose views and schema were fetched this session
 
     # ---------- layout ----------
 
@@ -290,6 +530,10 @@ class NotionTUI(App):
                 yield PageList(id="pages")
             with Vertical(id="preview-pane"):
                 yield Breadcrumb(id="crumbs")
+                yield Static("", id="dbtabs")
+                yield Static("", id="dbinfo")
+                yield Input(placeholder="filter rows: prop:a,b  prop~text  prop>=2024  -prop:x  words…", id="dbquery", select_on_focus=False)
+                yield Static("", id="dberror", markup=False)
                 with PreviewScroll():
                     yield BidiMarkdown("", id="preview")
         yield Footer()
@@ -410,6 +654,7 @@ class NotionTUI(App):
         index = event.list_view.index or 0
         if self.next_cursor and not self._loading and index >= len(self.shown) - LOAD_MORE_MARGIN:
             self.load_list(self.query_text, more=True)
+        self.refresh_bindings()  # database keys show only on databases
         if self._preview_timer:
             self._preview_timer.stop()
         self._preview_timer = self.set_timer(PREVIEW_DEBOUNCE, self._show_current)
@@ -421,6 +666,9 @@ class NotionTUI(App):
     # ---------- search ----------
 
     async def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "dbquery":
+            self._show_db_error("")
+            return
         query = event.value.strip()
         self.query_text = query
         self.next_cursor = None
@@ -436,6 +684,9 @@ class NotionTUI(App):
         self._search_timer = self.set_timer(SEARCH_DEBOUNCE, lambda: self.load_list(query))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "dbquery":
+            self._apply_db_query(event.value.strip())
+            return
         self.query_one(PageList).focus()
 
     # ---------- preview ----------
@@ -444,10 +695,12 @@ class NotionTUI(App):
         self._rendered_id = None
         self.query_one("#preview-pane").border_subtitle = ""
         self.query_one(Breadcrumb).parts = ()
+        self._render_db_bar()
         await self.query_one("#preview", Markdown).update(f"_{text}_")
 
     async def _render_page(self, page: Page, markdown: str | None, note: str = "") -> None:
         self.query_one("#preview-pane").border_subtitle = note
+        self._render_db_bar()
         if markdown is None:
             content = "_loading…_"
         else:
@@ -509,17 +762,259 @@ class NotionTUI(App):
             markdown = await self._fetch_content(page)
         except NtnError as err:
             if self.current and self.current.id == page.id:
-                await self._render_message(f"Could not load page: {err}")
+                if page.kind == "data_source":
+                    # Keep the toolbar, so a bad view filter or sort can be changed.
+                    self.db_rows = DbRows(page.id)
+                    await self._render_page(page, f"_Could not load rows: {err}_")
+                else:
+                    await self._render_message(f"Could not load page: {err}")
             return
         self.cache.put_content(page, markdown)
         if self.current and self.current.id == page.id:
             await self._render_page(page, markdown)
+            self.refresh_bindings()
         self._prefetch_next()
+        if page.kind == "data_source" and page.id not in self._meta_fresh:
+            self.refresh_db_meta(page)
 
     async def _fetch_content(self, page: Page) -> str:
         if page.kind == "data_source":
-            return rows_markdown(*await ntn.query_rows(page.id))
+            return await self._fetch_db(page)
         return await ntn.get_markdown(page.id)
+
+    # ---------- database views ----------
+
+    def _db_request(self, data_source_id: str) -> DbRequest:
+        """The current view, query line and sort override of a database (from the cache), as a query."""
+        views = [v for v in self.cache.views(data_source_id) if v.type not in SKIPPED_VIEW_TYPES]
+        schema = self.cache.schema(data_source_id)
+        view_id, query_text, sorts_override = self.cache.db_state(data_source_id)
+        view = next((v for v in views if v.id == view_id), views[0] if views else None)
+        req = DbRequest(views if views or schema is not None else None, schema, view, query_text, sorts_override)
+        filters: list[dict] = []
+        if query_text and schema is not None:
+            rows = self.db_rows.rows if self.db_rows and self.db_rows.page_id == data_source_id else []
+            try:
+                filters = query.parse(query_text, schema, people_names(rows))
+            except query.QueryError as err:
+                req.error = f"query not applied: {err}"
+        req.filter = query.combine(view.filter if view else None, filters)
+        req.sorts = sorts_override if sorts_override is not None else (view.sorts if view else None)
+        req.columns = view_columns(view, schema)
+        return req
+
+    def _save_db_state(self, data_source_id: str, **changes) -> None:
+        view_id, query_text, sorts = self.cache.db_state(data_source_id)
+        state = {"view_id": view_id, "query_text": query_text, "sorts": sorts} | changes
+        self.cache.put_db_state(data_source_id, state["view_id"], state["query_text"], state["sorts"])
+
+    async def _fetch_meta(self, data_source_id: str) -> bool:
+        """Fetch a database's views and schema into the cache. True when something changed."""
+        limit = asyncio.Semaphore(VIEW_FETCHES)
+
+        async def view(view_id: str) -> View:
+            async with limit:
+                return await ntn.get_view(view_id)
+
+        schema = await ntn.get_schema(data_source_id)
+        try:
+            views = list(await asyncio.gather(*(view(i) for i in await ntn.list_view_ids(data_source_id))))
+        except NtnError:
+            views = []  # no access to views: show the plain table
+        changed = schema != self.cache.schema(data_source_id) or views != self.cache.views(data_source_id)
+        self.cache.put_schema(data_source_id, schema)
+        self.cache.put_views(data_source_id, views)
+        self._meta_fresh.add(data_source_id)
+        return changed
+
+    async def _fetch_db(self, page: Page) -> str:
+        """Query the database's rows for its current view and query line; return the table."""
+        if self.cache.schema(page.id) is None:  # first time: views and schema decide what to ask for
+            await self._fetch_meta(page.id)
+        req = self._db_request(page.id)
+        rows, cursor = await ntn.query_rows(page.id, req.filter, req.sorts)
+        if self.current and self.current.id == page.id:
+            self.db_rows = DbRows(page.id, rows, cursor, req.columns)
+        return rows_markdown(rows, cursor is not None, req.columns)
+
+    @work(exclusive=True, group="dbmeta")
+    async def refresh_db_meta(self, page: Page) -> None:
+        """Refresh a database's views and schema; reload its rows when they changed."""
+        try:
+            changed = await self._fetch_meta(page.id)
+        except NtnError as err:
+            self._meta_fresh.add(page.id)  # don't retry on every cursor move
+            self.notify(str(err), title="Could not load database views", severity="warning")
+            return
+        if self.current and self.current.id == page.id:
+            if changed:
+                self._reload_db()
+            else:
+                self._render_db_bar()
+
+    def _is_db(self) -> bool:
+        return self.current is not None and self.current.kind == "data_source"
+
+    def _reload_db(self) -> None:
+        """Requery the current database after its view, query or sort changed."""
+        page = self.current
+        if page is None:
+            return
+        if self.db_rows and self.db_rows.page_id == page.id:
+            self.db_rows.cursor = None
+        self.query_one("#preview-pane").border_subtitle = "refreshing…"
+        self._render_db_bar(loading=True)
+        self.fetch_preview(page)
+
+    def _render_db_bar(self, loading: bool = False) -> None:
+        """The database toolbar: view tabs, then query · sort · row count."""
+        tabs, info = self.query_one("#dbtabs", Static), self.query_one("#dbinfo", Static)
+        page = self.current
+        if page is None or page.kind != "data_source":
+            for widget in (tabs, info, self.query_one("#dbquery"), self.query_one("#dberror")):
+                widget.display = False
+            return
+        req = self._db_request(page.id)
+        tabs.display = info.display = True
+        line = Text(no_wrap=True, overflow="ellipsis")
+        if req.views is None:
+            line.append("loading views…", style="dim")
+        elif not req.views:
+            line.append("no views", style="dim")
+        for i, view in enumerate(req.views or []):
+            if i:
+                line.append("  ")
+            label = f" {view_label(view)} "
+            line.append(label, style="bold reverse" if req.view and view.id == req.view.id else "dim")
+        tabs.update(line)
+
+        parts = []
+        if req.view and req.view.filter:
+            parts.append("view filter")
+        parts.append(f"filter: {req.query_text}" if req.query_text else "no filter")
+        if req.sorts_override is not None:
+            parts.append(f"sort: {sort_label(req.sorts, req.schema) or 'none'} (custom)")
+        else:
+            parts.append(f"sort: {sort_label(req.sorts, req.schema)}" if req.sorts else "unsorted")
+        rows = self.db_rows if self.db_rows and self.db_rows.page_id == page.id else None
+        if rows is None or loading:
+            parts.append("loading…")
+        else:
+            parts.append(f"{len(rows.rows)}{'+' if rows.cursor else ''} row{'' if len(rows.rows) == 1 and not rows.cursor else 's'}")
+        info.update(Text(" · ".join(parts), no_wrap=True, overflow="ellipsis"))
+        if not self.query_one("#dbquery").display:
+            self._show_db_error(req.error)
+
+    def _show_db_error(self, message: str) -> None:
+        error = self.query_one("#dberror", Static)
+        error.update(message)
+        error.display = bool(message)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action.startswith("db_"):
+            if not self._is_db():
+                return False
+            if action == "db_more":
+                rows = self.db_rows
+                return bool(rows and self.current and rows.page_id == self.current.id and rows.cursor)
+        return True
+
+    def action_db_view(self, step: int) -> None:
+        if not self._is_db():
+            return
+        req = self._db_request(self.current.id)
+        if not req.views:
+            self.notify("This database has no views to switch between.", severity="warning")
+            return
+        index = req.views.index(req.view) if req.view in req.views else 0
+        self._save_db_state(self.current.id, view_id=req.views[(index + step) % len(req.views)].id)
+        self._reload_db()
+
+    def action_db_filter(self) -> None:
+        if not self._is_db():
+            return
+        box = self.query_one("#dbquery", Input)
+        box.value = self.cache.db_state(self.current.id)[1]
+        box.cursor_position = len(box.value)  # refine the current filter: type on at the end
+        box.display = True
+        box.focus()
+
+    def _close_db_query(self) -> None:
+        box = self.query_one("#dbquery", Input)
+        box.display = False
+        self._show_db_error("")
+        self.query_one(PreviewScroll if self.screen.has_class("full") else PageList).focus()
+
+    def _apply_db_query(self, text: str) -> None:
+        page = self.current
+        if page is None or page.kind != "data_source":
+            self._close_db_query()
+            return
+        schema = self.cache.schema(page.id)
+        if text and schema is None:
+            self._show_db_error("The database's properties aren't loaded yet; try again in a moment.")
+            return
+        rows = self.db_rows.rows if self.db_rows and self.db_rows.page_id == page.id else []
+        try:
+            query.parse(text, schema or [], people_names(rows))
+        except query.QueryError as err:
+            self._show_db_error(str(err))
+            return
+        self._close_db_query()
+        self._save_db_state(page.id, query_text=text)
+        self._reload_db()
+
+    def action_db_sort(self) -> None:
+        if not self._is_db():
+            return
+        page = self.current
+        req = self._db_request(page.id)
+        if req.schema is None:
+            self.notify("The database's properties aren't loaded yet.", severity="warning")
+            return
+
+        def chosen(sorts: list | None) -> None:
+            if sorts is not None and self.current and self.current.id == page.id:
+                self._save_db_state(page.id, sorts=sorts)
+                self._reload_db()
+
+        self.push_screen(SortScreen(req.sorts or [], req.schema), chosen)
+
+    def action_db_clear(self) -> None:
+        if not self._is_db():
+            return
+        if self.query_one("#dbquery").display:
+            self._close_db_query()
+        self._save_db_state(self.current.id, query_text="", sorts=None)
+        self._reload_db()
+
+    def action_db_more(self) -> None:
+        rows = self.db_rows
+        if self._is_db() and rows and rows.page_id == self.current.id and rows.cursor:
+            self.load_more_rows(self.current)
+
+    @work(exclusive=True, group="preview")
+    async def load_more_rows(self, page: Page) -> None:
+        """Fetch the next 100 rows of the database being previewed and add them to the table."""
+        rows = self.db_rows
+        if not (rows and rows.page_id == page.id and rows.cursor):
+            return
+        self.query_one("#preview-pane").border_subtitle = "loading more rows…"
+        req = self._db_request(page.id)
+        try:
+            more, cursor = await ntn.query_rows(page.id, req.filter, req.sorts, start_cursor=rows.cursor)
+        except NtnError as err:
+            self.query_one("#preview-pane").border_subtitle = ""
+            self.notify(str(err), title="Could not load more rows", severity="error")
+            return
+        if not (self.current and self.current.id == page.id and self.db_rows is rows):
+            return
+        rows.rows += more
+        rows.cursor = cursor
+        markdown = rows_markdown(rows.rows, cursor is not None, rows.columns)
+        self.cache.put_content(page, markdown)
+        await self._render_page(page, markdown)
+        self.refresh_bindings()
 
     def _prefetch_next(self) -> None:
         """Warm the cache for the row below the cursor, so moving down feels instant."""
@@ -545,6 +1040,9 @@ class NotionTUI(App):
         self.query_one("#search", Input).focus()
 
     def action_back(self) -> None:
+        if self.query_one("#dbquery", Input).has_focus:
+            self._close_db_query()  # cancel: the query line keeps its applied value
+            return
         search = self.query_one("#search", Input)
         if search.has_focus and search.value:
             search.value = ""
@@ -556,6 +1054,7 @@ class NotionTUI(App):
         self.next_cursor = None
         if self.current:
             self.cache.invalidate(self.current.id)
+            self._meta_fresh.discard(self.current.id)  # a database's views and schema are fetched again too
         self.load_list(self.query_text)
 
     def _is_page(self, page: Page | None, verb: str) -> bool:

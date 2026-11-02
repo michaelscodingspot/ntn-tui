@@ -5,12 +5,13 @@ Lives at $XDG_CACHE_HOME/notion-tui/cache.db (default ~/.cache/notion-tui/cache.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
 from pathlib import Path
 
-from .ntn import Node, Page
+from .ntn import Node, Page, View
 
 MAX_DEPTH = 12  # guard against cycles or absurdly deep trees
 
@@ -41,6 +42,34 @@ CREATE TABLE IF NOT EXISTS nodes (
     parent_kind TEXT NOT NULL,  -- 'workspace' at the top
     parent_id   TEXT NOT NULL,
     fetched_at  REAL NOT NULL
+);
+
+-- A database's saved views (read-only copies), in Notion's order.
+CREATE TABLE IF NOT EXISTS views (
+    id             TEXT PRIMARY KEY,
+    data_source_id TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    type           TEXT NOT NULL,  -- table | board | list | calendar | timeline | gallery | map
+    filter_json    TEXT,           -- NULL = no filter
+    sorts_json     TEXT,           -- NULL = no sorts
+    columns_json   TEXT,           -- [{property_id, visible}] in display order; NULL = not set
+    position       INTEGER NOT NULL,
+    last_edited    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS views_data_source ON views(data_source_id, position);
+
+CREATE TABLE IF NOT EXISTS data_source_schema (
+    data_source_id  TEXT PRIMARY KEY,
+    properties_json TEXT NOT NULL,  -- [{id, name, type, options}]
+    fetched_at      REAL NOT NULL
+);
+
+-- What each database shows now: its view, query line and sort override.
+CREATE TABLE IF NOT EXISTS db_state (
+    data_source_id TEXT PRIMARY KEY,
+    view_id        TEXT,           -- NULL = first view
+    query_text     TEXT NOT NULL DEFAULT '',
+    sorts_json     TEXT            -- NULL = the view's sorts
 );
 """
 
@@ -152,3 +181,61 @@ class Cache:
             self.db.execute("DELETE FROM page_content WHERE page_id = ?", (page_id,))
             self.db.execute("DELETE FROM pages WHERE id = ?", (page_id,))
             self.db.execute("DELETE FROM nodes WHERE id = ?", (page_id,))
+
+    # ---------- databases: views, schema, current state ----------
+
+    def views(self, data_source_id: str) -> list[View]:
+        rows = self.db.execute(
+            "SELECT id, name, type, filter_json, sorts_json, columns_json, last_edited FROM views "
+            "WHERE data_source_id = ? ORDER BY position",
+            (data_source_id,),
+        )
+        return [View(i, n, t, _load(f), _load(s), _load(c), e) for i, n, t, f, s, c, e in rows]
+
+    def put_views(self, data_source_id: str, views: list[View]) -> None:
+        """Replace the data source's views."""
+        with self.db:
+            self.db.execute("DELETE FROM views WHERE data_source_id = ?", (data_source_id,))
+            self.db.executemany(
+                "INSERT OR REPLACE INTO views (id, data_source_id, name, type, filter_json, sorts_json, columns_json, "
+                "position, last_edited) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (v.id, data_source_id, v.name, v.type, _dump(v.filter), _dump(v.sorts), _dump(v.columns), i, v.last_edited)
+                    for i, v in enumerate(views)
+                ],
+            )
+
+    def schema(self, data_source_id: str) -> list[dict] | None:
+        row = self.db.execute(
+            "SELECT properties_json FROM data_source_schema WHERE data_source_id = ?", (data_source_id,)
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def put_schema(self, data_source_id: str, properties: list[dict]) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO data_source_schema (data_source_id, properties_json, fetched_at) VALUES (?, ?, ?)",
+                (data_source_id, json.dumps(properties), time.time()),
+            )
+
+    def db_state(self, data_source_id: str) -> tuple[str | None, str, list | None]:
+        """(view_id, query_text, sorts override); (None, "", None) when never changed."""
+        row = self.db.execute(
+            "SELECT view_id, query_text, sorts_json FROM db_state WHERE data_source_id = ?", (data_source_id,)
+        ).fetchone()
+        return (row[0], row[1], _load(row[2])) if row else (None, "", None)
+
+    def put_db_state(self, data_source_id: str, view_id: str | None, query_text: str, sorts: list | None) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO db_state (data_source_id, view_id, query_text, sorts_json) VALUES (?, ?, ?, ?)",
+                (data_source_id, view_id, query_text, _dump(sorts)),
+            )
+
+
+def _dump(value: object) -> str | None:
+    return None if value is None else json.dumps(value)
+
+
+def _load(text: str | None):
+    return None if text is None else json.loads(text)
