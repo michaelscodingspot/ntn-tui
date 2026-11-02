@@ -1,4 +1,4 @@
-from notion_tui.app import rows_markdown, sort_label, view_columns
+from notion_tui.database import rows_markdown, sort_label, view_columns
 from notion_tui.ntn import View
 
 SCHEMA = [

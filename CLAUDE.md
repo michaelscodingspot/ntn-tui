@@ -2,7 +2,9 @@
 
 Terminal UI for Notion (Python 3.13, Textual, run with `uv run notion-tui`): page list left, Markdown preview right, edit in `$EDITOR`.
 
-- `src/notion_tui/app.py` — Textual app: list, preview, search, database view tabs / filter line / sort picker, modals, key bindings.
+- `src/notion_tui/app.py` — Textual app: list, preview, search, database view tabs / filter line / paging, key bindings.
+- `src/notion_tui/database.py` — pure database-preview helpers: rows table, view columns and labels, sort labels. Tested in `tests/test_database.py`.
+- `src/notion_tui/modals.py` — modal dialogs: trash confirmation, options, database sort picker.
 - `src/notion_tui/ntn.py` — async wrapper over the `ntn` CLI; the only path to Notion (search, data-source schema and query, views (read-only), pages get/edit/create/trash).
 - `src/notion_tui/cache.py` — SQLite cache `~/.cache/notion-tui/cache.db` (`pages`, `page_content`, `nodes`; for databases `views`, `data_source_schema`, `db_state`) for instant startup and previews.
 - `src/notion_tui/query.py` — pure parser: database filter line → Notion filter JSON, using the property schema. Tested in `tests/test_query.py` (`uv run pytest`).

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass, field
 from datetime import datetime
 
 from rich.text import Text
@@ -12,17 +11,27 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import ModalScreen
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Button, Footer, Input, Label, ListItem, ListView, Markdown, RadioButton, RadioSet, Static
+from textual.widgets import Footer, Input, Label, ListItem, ListView, Markdown, Static
 
 from . import desktop, ntn, query
 from .bidi import BidiMarkdown
 from .cache import MAX_DEPTH, Cache
+from .database import (
+    SKIPPED_VIEW_TYPES,
+    DbRequest,
+    DbRows,
+    people_names,
+    rows_markdown,
+    sort_label,
+    view_columns,
+    view_label,
+)
+from .modals import ConfirmScreen, OptionsScreen, SortScreen
 from .ntn import NtnError, Page, View
-from .options import DATABASE_ENTRIES, Options
+from .options import Options
 
 PREVIEW_DEBOUNCE = 0.12  # seconds to wait after the cursor stops before loading a preview
 SEARCH_DEBOUNCE = 0.4  # seconds to wait after typing stops before asking Notion
@@ -54,119 +63,6 @@ def split_page(md: str, title: str) -> tuple[list[tuple[str, str]], str]:
     md = md.replace("<empty-block/>", "")
     md = _BR.sub("  \n", md)
     return properties, md.strip()
-
-
-# System columns that only add width to a database preview.
-# Columns a view may show that the preview can't render as text.
-_UNRENDERED_TYPES = {"created_by", "last_edited_by", "relation", "rollup", "files", "button"}
-_HIDDEN_COLUMN_TYPES = _UNRENDERED_TYPES | {"created_time", "last_edited_time", "unique_id"}
-# View types with no rows to show. Other non-table views (board, calendar, …) are shown as a table.
-SKIPPED_VIEW_TYPES = {"form", "chart", "dashboard"}
-
-
-def rows_markdown(rows: list[dict], has_more: bool, columns: list[str] | None = None) -> str:
-    """A database's rows as a Markdown table.
-
-    Without `columns`: the title column first, then non-empty columns. With `columns` (a view's
-    visible columns, in its order): those columns, minus ones that can't be shown as text.
-    """
-    if not rows:
-        return "_(no rows)_"
-    if columns is None:
-        columns = []
-        for row in rows:
-            for name, prop in row.get("properties", {}).items():
-                if name not in columns and prop.get("type") not in _HIDDEN_COLUMN_TYPES:
-                    columns.append(name)
-        columns.sort(key=lambda name: rows[0]["properties"].get(name, {}).get("type") != "title")
-        drop_empty = True
-    else:
-        types = {name: prop.get("type") for row in rows[:1] for name, prop in row.get("properties", {}).items()}
-        columns = [c for c in columns if c in types and types[c] not in _UNRENDERED_TYPES]
-        drop_empty = False
-    if not columns:
-        return "_(no columns to show)_"
-    cells = [[ntn.value_text(row["properties"][c]) if c in row["properties"] else "" for c in columns] for row in rows]
-    keep = [i for i, c in enumerate(columns) if i == 0 or not drop_empty or any(r[i] for r in cells)]
-
-    def line(values: list[str]) -> str:
-        return "| " + " | ".join(v.replace("|", "\\|").replace("\n", " ") for v in values) + " |"
-
-    out = [line([columns[i].strip() for i in keep]), "|" + "---|" * len(keep)]
-    out += [line([r[i] for i in keep]) for r in cells]
-    if has_more:
-        out.append(f"\n_{len(rows)} rows shown. Press m for more._")
-    return "\n".join(out)
-
-
-def view_columns(view: View | None, schema: list[dict] | None) -> list[str] | None:
-    """Names of a view's visible columns in its order, title included; None = no column setup."""
-    if view is None or not view.columns or not schema:
-        return None
-    by_id = {p["id"]: p for p in schema}
-    names = [by_id[c["property_id"]]["name"] for c in view.columns if c.get("visible") and c.get("property_id") in by_id]
-    title = next((p["name"] for p in schema if p["type"] == "title"), None)
-    if title and title not in names:
-        names.insert(0, title)  # list and board views keep the title out of their column list
-    return names
-
-
-def sort_level_name(level: dict, schema: list[dict] | None) -> str:
-    """The property (or timestamp) one sort level sorts by."""
-    if "property" not in level:
-        return level.get("timestamp", "?").replace("_", " ")
-    return next((p["name"].strip() for p in schema or [] if p["id"] == level["property"]), level["property"])
-
-
-def sort_label(sorts: list | None, schema: list[dict] | None) -> str:
-    """ "Priority ↑, Due date ↓" for a sorts list."""
-    return ", ".join(
-        f"{sort_level_name(level, schema)} {'↓' if level.get('direction') == 'descending' else '↑'}" for level in sorts or []
-    )
-
-
-def view_label(view: View) -> str:
-    name = view.name.strip() or "untitled"
-    return name if view.type in ("table", "list") else f"{name} ({view.type})"
-
-
-@dataclass
-class DbRequest:
-    """What a database preview asks Notion for: the current view plus the query line and sort override."""
-
-    views: list[View] | None  # None = not fetched yet
-    schema: list[dict] | None
-    view: View | None
-    query_text: str
-    sorts_override: list | None
-    filter: dict | None = None
-    sorts: list | None = None
-    columns: list[str] | None = None
-    error: str = ""  # the saved query line no longer parses
-
-
-@dataclass
-class DbRows:
-    """Rows loaded for the database preview, for paging and the row count."""
-
-    page_id: str
-    rows: list[dict] = field(default_factory=list)
-    cursor: str | None = None
-    columns: list[str] | None = None
-    filter: dict | None = None  # what page 1 was queried with; later pages must ask the same
-    sorts: list | None = None
-
-
-def people_names(rows: list[dict]) -> dict[str, str]:
-    """Person name → user ID, from people properties of loaded rows (the query line filters people by name)."""
-    found: dict[str, str] = {}
-    for row in rows:
-        for prop in row.get("properties", {}).values():
-            if prop.get("type") == "people":
-                for person in prop.get("people") or []:
-                    if person.get("name") and person.get("id"):
-                        found[person["name"]] = person["id"]
-    return found
 
 
 def _local(iso: str) -> datetime | None:
@@ -237,230 +133,6 @@ class PreviewScroll(VerticalScroll, can_focus=True):
     ]
 
 
-class ConfirmScreen(ModalScreen[bool]):
-    AUTO_FOCUS = "#no"
-    BINDINGS = [
-        Binding("y", "answer(True)", "yes"),
-        Binding("n,escape", "answer(False)", "no"),
-    ]
-    DEFAULT_CSS = """
-    ConfirmScreen { align: center middle; }
-    #dialog { width: 60; height: auto; padding: 1 2; border: round $error; background: $surface; }
-    #dialog Label { width: 100%; margin-bottom: 1; }
-    #buttons { height: auto; align-horizontal: right; }
-    #buttons Button { margin-left: 2; }
-    """
-
-    def __init__(self, question: str) -> None:
-        super().__init__()
-        self.question = question
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="dialog"):
-            yield Label(self.question, markup=False)
-            with Horizontal(id="buttons"):
-                yield Button("Trash (y)", variant="error", id="yes")
-                yield Button("Cancel (n)", id="no")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "yes")
-
-    def action_answer(self, yes: bool) -> None:
-        self.dismiss(yes)
-
-
-_ENTRY_LABELS = {
-    "yes": "yes: always",
-    "never": "never",
-    "show-non-empty": "show-non-empty: only entries with page content (default)",
-}
-
-
-class OptionsScreen(ModalScreen[None]):
-    """Options dialog. Each change is saved at once; the list is refreshed on close."""
-
-    AUTO_FOCUS = "RadioSet"
-    BINDINGS = [Binding("escape,comma,q", "close", "close")]
-    DEFAULT_CSS = """
-    OptionsScreen { align: center middle; }
-    #options { width: 72; height: auto; padding: 1 2; border: round $accent; background: $surface; }
-    #options Label { width: 100%; }
-    #options RadioSet { width: 100%; margin: 1 0; }
-    #options .hint { color: $text-muted; }
-    """
-
-    def __init__(self, options: Options) -> None:
-        super().__init__()
-        self.options = options
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="options"):
-            yield Label("[b]Show pages that are database entries[/b]")
-            with RadioSet(id="database_entries"):
-                for value in DATABASE_ENTRIES:
-                    yield RadioButton(_ENTRY_LABELS[value], value=value == self.options.database_entries, name=value)
-            yield Label("↑/↓ move · enter choose · esc close", classes="hint")
-
-    def on_mount(self) -> None:
-        self.query_one("#options").border_title = "Options"
-        # RadioSet starts its highlight on the first button; start it on the saved choice instead.
-        radio_set = self.query_one("#database_entries", RadioSet)
-        for _ in range(max(radio_set.pressed_index, 0)):
-            radio_set.action_next_button()
-
-    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
-        if event.radio_set.id == "database_entries" and event.pressed.name:
-            self.options.database_entries = event.pressed.name
-            self.options.save()
-
-    def action_close(self) -> None:
-        self.dismiss(None)
-
-
-# Property types a database can be sorted by.
-_UNSORTABLE_TYPES = {"relation", "rollup", "files", "button"}
-
-
-class PickList(ListView):
-    BINDINGS = [
-        Binding("j", "cursor_down", "down", show=False),
-        Binding("k", "cursor_up", "up", show=False),
-    ]
-
-
-class PropertyPickScreen(ModalScreen[str | None]):
-    """Choose one property to sort by. Returns its ID."""
-
-    AUTO_FOCUS = "PickList"
-    BINDINGS = [Binding("escape,q", "cancel", "cancel")]
-    DEFAULT_CSS = """
-    PropertyPickScreen { align: center middle; }
-    #pick { width: 50; height: auto; max-height: 80%; padding: 1 2; border: round $accent; background: $surface; }
-    #pick PickList { height: auto; max-height: 20; background: transparent; }
-    #pick ListItem { padding: 0 1; }
-    #pick .hint { color: $text-muted; margin-top: 1; }
-    """
-
-    def __init__(self, properties: list[dict]) -> None:
-        super().__init__()
-        self.properties = properties
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="pick"):
-            yield PickList(*(ListItem(Label(Text.assemble(p["name"].strip(), (f"  {p['type']}", "dim")))) for p in self.properties))
-            yield Label("j/k move · enter choose · esc cancel", classes="hint")
-
-    def on_mount(self) -> None:
-        self.query_one("#pick").border_title = "Sort by"
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        event.stop()
-        self.dismiss(self.properties[event.list_view.index or 0]["id"])
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class SortScreen(ModalScreen[list | None]):
-    """Edit a database's sort levels. Returns the new sorts list, or None when cancelled."""
-
-    AUTO_FOCUS = "PickList"
-    BINDINGS = [
-        Binding("enter", "apply", "apply", priority=True),
-        Binding("escape,q", "cancel", "cancel"),
-        Binding("a,o", "add", "add"),
-        Binding("x,d", "remove", "remove"),
-        Binding("space,t", "flip", "flip"),
-        Binding("K", "move(-1)", "move up"),
-        Binding("J", "move(1)", "move down"),
-        Binding("c", "clear", "clear"),
-    ]
-    DEFAULT_CSS = """
-    SortScreen { align: center middle; }
-    #sort { width: 60; height: auto; padding: 1 2; border: round $accent; background: $surface; }
-    #sort PickList { height: auto; max-height: 12; background: transparent; }
-    #sort ListItem { padding: 0 1; }
-    #sort .empty { color: $text-muted; }
-    #sort .hint { color: $text-muted; margin-top: 1; }
-    """
-
-    def __init__(self, sorts: list, schema: list[dict]) -> None:
-        super().__init__()
-        self.levels = [dict(level) for level in sorts]
-        self.schema = schema
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="sort"):
-            yield PickList()
-            yield Label("(no sort: rows come in Notion's default order)", classes="empty")
-            yield Label(
-                "j/k move · a add · x remove · space flip ↑/↓\nJ/K move level down/up · c clear · enter apply · esc cancel",
-                classes="hint",
-            )
-
-    async def on_mount(self) -> None:
-        self.query_one("#sort").border_title = "Sort"
-        await self._render_levels(0)
-
-    def _label(self, i: int, level: dict) -> str:
-        name = sort_level_name(level, self.schema)
-        return f"{i + 1}. {name}  {'↓ descending' if level.get('direction') == 'descending' else '↑ ascending'}"
-
-    async def _render_levels(self, index: int) -> None:
-        pick = self.query_one(PickList)
-        await pick.clear()
-        await pick.extend(ListItem(Label(self._label(i, level), markup=False)) for i, level in enumerate(self.levels))
-        self.query_one(".empty").display = not self.levels
-        if self.levels:
-            pick.index = max(0, min(index, len(self.levels) - 1))
-
-    def _index(self) -> int | None:
-        index = self.query_one(PickList).index
-        return index if self.levels and index is not None else None
-
-    def action_add(self) -> None:
-        used = {level.get("property") for level in self.levels}
-        choices = [p for p in self.schema if p["type"] not in _UNSORTABLE_TYPES and p["id"] not in used]
-        if not choices:
-            self.notify("No more properties to sort by.", severity="warning")
-            return
-
-        async def picked(prop_id: str | None) -> None:
-            if prop_id:
-                self.levels.append({"property": prop_id, "direction": "ascending"})
-                await self._render_levels(len(self.levels) - 1)
-
-        self.app.push_screen(PropertyPickScreen(choices), picked)
-
-    async def action_remove(self) -> None:
-        index = self._index()
-        if index is not None:
-            del self.levels[index]
-            await self._render_levels(index)
-
-    async def action_flip(self) -> None:
-        index = self._index()
-        if index is not None:
-            level = self.levels[index]
-            level["direction"] = "ascending" if level.get("direction") == "descending" else "descending"
-            await self._render_levels(index)
-
-    async def action_move(self, step: int) -> None:
-        index = self._index()
-        if index is None or not 0 <= index + step < len(self.levels):
-            return
-        self.levels[index], self.levels[index + step] = self.levels[index + step], self.levels[index]
-        await self._render_levels(index + step)
-
-    async def action_clear(self) -> None:
-        self.levels = []
-        await self._render_levels(0)
-
-    def action_apply(self) -> None:
-        self.dismiss(self.levels)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
 
 
 class NotionTUI(App):
