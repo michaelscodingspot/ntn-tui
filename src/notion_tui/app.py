@@ -146,6 +146,22 @@ def with_cached_tail(fresh: list[Page], cached: list[Page]) -> list[Page]:
     return fresh + [p for p in cached if p.id not in ids and p.last_edited < oldest]
 
 
+def vanished(fresh: list[Page], cached: list[Page], complete: bool) -> list[Page]:
+    """Cached pages a first batch of recent pages proves gone (trashed, deleted or unshared in Notion).
+
+    The batch holds every page edited after its oldest one, so a cached page edited later that is missing
+    from it is gone; with `complete` (no further batch) every missing page is. Pages edited in the same
+    minute as the batch's oldest may still come in the next batch, so they are kept.
+    """
+    ids = {p.id for p in fresh}
+    if complete:
+        return [p for p in cached if p.id not in ids]
+    if not fresh:
+        return []
+    oldest = min(p.last_edited for p in fresh)
+    return [p for p in cached if p.id not in ids and p.last_edited > oldest]
+
+
 class NotionTUI(App):
     TITLE = "notion-tui"
     CSS = """
@@ -344,10 +360,14 @@ class NotionTUI(App):
                 # Every page was already listed from the cache: no new row to scroll onto, so fetch on.
                 self.load_list(query, more=True)
             return
-        if not query and next_cursor:
-            # Keep the cached pages older than this first batch, so the list does not shrink to one batch
-            # at startup or on refresh. Later batches skip the ones already listed.
-            pages = with_cached_tail(pages, self.cache.recent_pages())
+        if not query:
+            cached = self.cache.recent_pages()
+            for gone in vanished(pages, cached, complete=not next_cursor):
+                self.cache.forget(gone.id)  # so the next startup does not show it and then drop it
+            if next_cursor:
+                # Keep the cached pages older than this first batch, so the list does not shrink to one batch
+                # at startup or on refresh. Later batches skip the ones already listed.
+                pages = with_cached_tail(pages, cached)
         await self._show_pages(pages, keep_id=self.current.id if self.current else None)
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
