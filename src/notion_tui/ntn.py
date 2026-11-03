@@ -11,6 +11,9 @@ import json
 import shutil
 import subprocess
 from dataclasses import dataclass
+from urllib.parse import unquote
+
+from .query import QueryError, combine
 
 NTN = shutil.which("ntn") or "ntn"
 
@@ -58,7 +61,10 @@ async def _run(*args: str) -> str:
         out, err = await proc.communicate()
     except asyncio.CancelledError:
         # A newer request superseded this one: don't leave ntn running.
-        proc.kill()
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass  # it had already exited
         await proc.wait()
         raise
     if proc.returncode != 0:
@@ -152,11 +158,83 @@ async def get_node(kind: str, node_id: str) -> Node:
     return Node(node_id, kind, title, parent_kind, parent_id)
 
 
-async def query_rows(data_source_id: str, page_size: int = 100) -> tuple[list[dict], bool]:
-    """First rows of a database table, and whether there are more."""
-    data = json.loads(await _run("api", f"v1/data_sources/{data_source_id}/query", "-d", json.dumps({"page_size": page_size})))
+@dataclass(frozen=True)
+class View:
+    """A saved view of a database: its filter, sorts and visible columns (read-only here)."""
+
+    id: str
+    name: str
+    type: str  # table | board | list | calendar | timeline | gallery | form | chart | map | dashboard
+    filter: dict | None  # same shape as a data-source query filter
+    sorts: list | None  # same shape as query sorts; properties are property IDs
+    columns: list | None  # [{"property_id", "visible"}] in display order; None when the view has none
+    last_edited: str = ""
+
+
+async def list_view_ids(data_source_id: str) -> list[str]:
+    """IDs of a data source's views, in Notion's order (all pages)."""
+    ids: list[str] = []
+    cursor = None
+    while True:
+        path = f"v1/views?data_source_id={data_source_id}" + (f"&start_cursor={cursor}" if cursor else "")
+        data = json.loads(await _run("api", path, "-X", "GET"))
+        ids += [r["id"] for r in data.get("results", []) if r.get("id")]
+        cursor = data.get("next_cursor")
+        if not (data.get("has_more") and cursor):
+            return ids
+
+
+async def get_view(view_id: str) -> View:
+    obj = json.loads(await _run("api", f"v1/views/{view_id}", "-X", "GET"))
+    config = obj.get("configuration") or {}
+    # Quick filters (the filter pills under a view's tabs) narrow the view too: AND them in.
+    quick = [{"property": prop_id, **condition} for prop_id, condition in (obj.get("quick_filters") or {}).items()]
+    try:
+        view_filter = combine(obj.get("filter") or None, quick)
+    except QueryError:
+        view_filter = obj.get("filter") or None  # too deep for Notion with the quick filters ANDed in
+    return View(
+        id=obj.get("id", view_id),
+        name=obj.get("name") or "",
+        type=obj.get("type") or "table",
+        filter=view_filter,
+        sorts=obj.get("sorts") or None,
+        columns=config.get("properties") or None,
+        last_edited=obj.get("last_edited_time", ""),
+    )
+
+
+async def get_schema(data_source_id: str) -> list[dict]:
+    """A data source's properties: [{id, name, type, options}], title first."""
+    obj = json.loads(await _run("api", f"v1/data_sources/{data_source_id}", "-X", "GET"))
+    props = []
+    for name, prop in (obj.get("properties") or {}).items():
+        kind = prop.get("type", "")
+        options = [o.get("name", "") for o in (prop.get(kind) or {}).get("options", [])] if isinstance(prop.get(kind), dict) else []
+        # The schema URL-encodes IDs ("%5Dkno") while views use them raw ("]kno").
+        props.append({"id": unquote(prop.get("id", "")), "name": name, "type": kind, "options": options})
+    props.sort(key=lambda p: p["type"] != "title")
+    return props
+
+
+async def query_rows(
+    data_source_id: str,
+    filter: dict | None = None,
+    sorts: list | None = None,
+    start_cursor: str | None = None,
+    page_size: int = 100,
+) -> tuple[list[dict], str | None]:
+    """One page of a database's rows, and the cursor for the next page (None when there are no more)."""
+    body: dict = {"page_size": page_size}
+    if filter:
+        body["filter"] = filter
+    if sorts:
+        body["sorts"] = sorts
+    if start_cursor:
+        body["start_cursor"] = start_cursor
+    data = json.loads(await _run("api", f"v1/data_sources/{data_source_id}/query", "-d", json.dumps(body)))
     rows = [r for r in data.get("results", []) if not r.get("in_trash")]
-    return rows, bool(data.get("has_more"))
+    return rows, data.get("next_cursor") if data.get("has_more") else None
 
 
 def value_text(prop: dict) -> str:
@@ -183,6 +261,12 @@ def value_text(prop: dict) -> str:
             return value or ""
         case "people":
             return ", ".join(p.get("name", "") for p in value or [])
+        case "created_time" | "last_edited_time":
+            return (value or "")[:10]
+        case "unique_id":
+            if not value or value.get("number") is None:
+                return ""
+            return f"{value.get('prefix') or ''}{'-' if value.get('prefix') else ''}{value['number']}"
         case "formula":
             inner = (value or {}).get((value or {}).get("type"))
             return "" if inner is None else str(inner)
