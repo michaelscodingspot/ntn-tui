@@ -297,14 +297,19 @@ async def get_markdown(page_id: str) -> str:
 _PARENT_KEYS = {"page": "page_id", "database": "database_id", "data_source": "data_source_id"}
 
 
-async def create_page(title: str, parent_kind: str, parent_id: str) -> Page:
-    """Create an empty page with a title under a page, database or data source."""
+def new_page_body(title: str, parent_kind: str, parent_id: str) -> dict:
+    """`v1/pages` request body: an empty page with a title under a page, database or data source."""
     key = _PARENT_KEYS[parent_kind]
-    body = {
+    return {
         "parent": {"type": key, key: parent_id},
         # "title" is the title property's ID in every database, and the only property of a plain page.
         "properties": {"title": {"title": [{"type": "text", "text": {"content": title}}]}},
     }
+
+
+async def create_page(title: str, parent_kind: str, parent_id: str) -> Page:
+    """Create an empty titled page; returns it as a list item."""
+    body = new_page_body(title, parent_kind, parent_id)
     return _page(json.loads(await _run("api", "v1/pages", "-d", json.dumps(body))))
 
 

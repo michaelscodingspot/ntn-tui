@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from rich.text import Text
@@ -12,9 +12,16 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.timer import Timer
-from textual.widgets import Button, Input, Label, ListItem, ListView, RadioButton, RadioSet
+from textual.widgets import (
+    Button,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    RadioButton,
+    RadioSet,
+)
 
-from . import ntn
 from .database import sort_level_name
 from .ntn import NtnError, Page
 from .options import DATABASE_ENTRIES, Options
@@ -115,6 +122,32 @@ class Location:
     parent_kind: str  # page | database | data_source
     parent_id: str
 
+    @classmethod
+    def inside(cls, page: Page, path: str) -> Location:
+        """Inside a list item; a database is shown as its data source, so it gets the rows' parent."""
+        kind = "data_source" if page.kind == "data_source" else "page"
+        return cls(f"Inside: {path}", kind, page.id)
+
+
+def page_path(page: Page, ancestry: tuple[list[str], tuple[str, str] | None]) -> str:
+    """"Notes / Quick Notes" from the cached ancestry; "… / Quick Notes" when it isn't all cached."""
+    titles, missing = ancestry
+    if missing is not None and page.parent_kind != "workspace":
+        titles = ["…"]
+    return " / ".join([*titles, page.title])
+
+
+def nearby_locations(page: Page | None, ancestry: tuple[list[str], tuple[str, str] | None]) -> list[Location]:
+    """Where a new page can go near the highlighted page: inside it, then next to it."""
+    if page is None:
+        return []
+    locations = [Location.inside(page, page_path(page, ancestry))]
+    if page.parent_kind in ("page", "database", "data_source"):
+        titles, missing = ancestry
+        where = " / ".join(titles) if missing is None and titles else "its parent"
+        locations.append(Location(f"Next to “{page.title}”: in {where}", page.parent_kind, page.parent_id))
+    return locations
+
 
 @dataclass(frozen=True)
 class NewPage:
@@ -123,17 +156,18 @@ class NewPage:
 
 
 LOCATION_SEARCH_DEBOUNCE = 0.4
+_NO_NEARBY = "No place near the highlighted page. Search for a parent."
 
 
 class NewPageScreen(ModalScreen[NewPage | None]):
     """Ask for a new page's title and where in the tree it goes.
 
     The location list starts with places near the highlighted page; typing in the
-    location search replaces it with matching pages and databases from Notion.
+    location search replaces it with matching pages and databases (`find` asks Notion).
     """
 
     AUTO_FOCUS = "#title"
-    BINDINGS = [Binding("escape", "cancel", "cancel")]
+    BINDINGS = [Binding("escape", "back", "back")]
     DEFAULT_CSS = """
     NewPageScreen { align: center middle; }
     #newpage { width: 80; height: auto; max-height: 90%; padding: 1 2; border: round $accent; background: $surface; }
@@ -144,10 +178,10 @@ class NewPageScreen(ModalScreen[NewPage | None]):
     #newpage .hint { margin-top: 1; }
     """
 
-    def __init__(self, nearby: list[Location], path_of: Callable[[Page], str]) -> None:
+    def __init__(self, nearby: list[Location], find: Callable[[str], Awaitable[list[Location]]]) -> None:
         super().__init__()
         self.nearby = nearby
-        self.path_of = path_of  # "Notes / Quick Notes" for a page, from the cache
+        self.find = find  # search text → parent locations; raises NtnError
         self.locations: list[Location] = []
         self._search_timer: Timer | None = None
 
@@ -159,11 +193,11 @@ class NewPageScreen(ModalScreen[NewPage | None]):
             yield Input(placeholder="search for another parent page or database…", id="where")
             yield PickList()
             yield Label("", classes="empty")
-            yield Label("tab next field · j/k move · enter create · esc cancel", classes="hint")
+            yield Label("tab next field · j/k move · enter create · esc clear search / cancel", classes="hint")
 
     async def on_mount(self) -> None:
         self.query_one("#newpage").border_title = "New page"
-        await self._show_locations(self.nearby, "No place near the highlighted page. Search for a parent.")
+        await self._show_locations(self.nearby, _NO_NEARBY)
 
     async def _show_locations(self, locations: list[Location], empty: str) -> None:
         self.locations = locations
@@ -176,35 +210,29 @@ class NewPageScreen(ModalScreen[NewPage | None]):
         empty_label.update(empty)
         empty_label.display = not locations
 
-    def _location(self, page: Page) -> Location:
-        kind = "data_source" if page.kind == "data_source" else "page"
-        return Location(f"Inside: {self.path_of(page)}", kind, page.id)
-
     async def on_input_changed(self, event: Input.Changed) -> None:
+        event.stop()  # the app treats input changes as its page search
         if event.input.id != "where":
             return
-        event.stop()
         if self._search_timer:
             self._search_timer.stop()
+        self.workers.cancel_group(self, "where")
         query = event.value.strip()
         if not query:
-            self.workers.cancel_group(self, "where")
-            await self._show_locations(self.nearby, "No place near the highlighted page. Search for a parent.")
+            await self._show_locations(self.nearby, _NO_NEARBY)
             return
-        self.query_one(".empty", Label).update("searching…")
+        # Drop the old rows at once, so a stale place can't be picked while the search runs.
+        await self._show_locations([], "searching…")
         self._search_timer = self.set_timer(LOCATION_SEARCH_DEBOUNCE, lambda: self.search(query))
 
     @work(exclusive=True, group="where")
     async def search(self, query: str) -> None:
         try:
-            pages, _ = await ntn.search(query, page_size=25)
+            locations, empty = await self.find(query), f"Nothing matches “{query}”."
         except NtnError as err:
-            await self._show_locations([], f"Search failed: {err}")
-            return
-        if self.query_one("#where", Input).value.strip() != query:
-            return  # typed on meanwhile
-        # Database rows can hold pages too, but are rarely meant as a parent.
-        await self._show_locations([self._location(p) for p in pages if not p.is_entry], f"Nothing matches “{query}”.")
+            locations, empty = [], f"Search failed: {err}"
+        if self.query_one("#where", Input).value.strip() == query:  # else typed on meanwhile
+            await self._show_locations(locations, empty)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
@@ -212,20 +240,21 @@ class NewPageScreen(ModalScreen[NewPage | None]):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         event.stop()
-        self._create(event.list_view.index or 0)
-
-    def _create(self, index: int) -> None:
-        if not self.locations:
-            return
         title = self.query_one("#title", Input).value.strip()
         if not title:
             self.notify("Give the page a title first.", severity="warning")
             self.query_one("#title", Input).focus()
             return
-        self.dismiss(NewPage(title, self.locations[index]))
+        self.dismiss(NewPage(title, self.locations[event.list_view.index or 0]))
 
-    def action_cancel(self) -> None:
-        self.dismiss(None)
+    def action_back(self) -> None:
+        """Like the main window: esc clears a search first, then closes."""
+        where = self.query_one("#where", Input)
+        if where.value:
+            where.value = ""
+            where.focus()
+        else:
+            self.dismiss(None)
 
 
 # Property types a database can be sorted by.

@@ -29,8 +29,17 @@ from .database import (
     view_columns,
     view_label,
 )
-from .modals import ConfirmScreen, Location, NewPage, NewPageScreen, OptionsScreen, SortScreen
-from .ntn import NtnError, Page, View
+from .modals import (
+    ConfirmScreen,
+    Location,
+    NewPage,
+    NewPageScreen,
+    OptionsScreen,
+    SortScreen,
+    nearby_locations,
+    page_path,
+)
+from .ntn import Node, NtnError, Page, View
 from .options import Options
 
 PREVIEW_DEBOUNCE = 0.12  # seconds to wait after the cursor stops before loading a preview
@@ -197,6 +206,7 @@ class NotionTUI(App):
         self.db_rows: DbRows | None = None  # rows of the database being previewed
         self._meta_fresh: set[str] = set()  # data sources whose views and schema were fetched this session
         self._people: dict[str, dict[str, str]] = {}  # data source → person name → user ID, seen in its rows
+        self._created: Page | None = None  # page made here that Notion's search may not list yet
 
     # ---------- layout ----------
 
@@ -320,6 +330,12 @@ class NotionTUI(App):
         if query != self.query_text:
             return  # the user typed something else meanwhile
         self.cache.upsert_pages(pages)
+        if self._created and not more:
+            # Notion's search lags a few seconds behind a new page: keep it on top until it shows up.
+            if any(p.id == self._created.id for p in pages):
+                self._created = None
+            else:
+                pages = [self._created, *pages]
         self.next_cursor = next_cursor
         if more:
             await self._append_pages(pages)
@@ -347,6 +363,8 @@ class NotionTUI(App):
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "dbquery":
             self._show_db_error("")
+            return
+        if event.input.id != "search":
             return
         query = event.value.strip()
         self.query_text = query
@@ -770,8 +788,11 @@ class NotionTUI(App):
 
     def action_edit(self) -> None:
         page = self.current
-        if not self._is_page(page, "edited"):
-            return
+        if self._is_page(page, "edited"):
+            self._edit_in_editor(page)
+
+    def _edit_in_editor(self, page: Page) -> None:
+        """Open the page in $EDITOR (`ntn pages edit`), then reload the list."""
         with self.suspend():
             code = ntn.run_interactive("pages", "edit", page.id)
         if code != 0:
@@ -781,31 +802,21 @@ class NotionTUI(App):
         self.load_list(self.query_text)
 
     def _path_of(self, page: Page) -> str:
-        """"Notes / Quick Notes" from the cache; "… / Quick Notes" when ancestors aren't cached."""
-        titles, missing = self.cache.ancestry(page.id)
-        if missing is not None and page.parent_kind != "workspace":
-            titles = ["…"]
-        return " / ".join([*titles, page.title])
+        return page_path(page, self.cache.ancestry(page.id))
 
-    def _nearby_locations(self) -> list[Location]:
-        """Where a new page can go, near the highlighted page: inside it, then next to it."""
-        page = self.current
-        if page is None:
-            return []
-        kind = "data_source" if page.kind == "data_source" else "page"
-        locations = [Location(f"Inside: {self._path_of(page)}", kind, page.id)]
-        if page.parent_kind in ("page", "database", "data_source") and page.parent_id:
-            titles, missing = self.cache.ancestry(page.id)
-            where = " / ".join(titles) if missing is None and titles else "its parent"
-            locations.append(Location(f"Next to “{page.title}”: in {where}", page.parent_kind, page.parent_id))
-        return locations
+    async def _find_parents(self, query: str) -> list[Location]:
+        """Pages and databases matching `query`, as places for a new page."""
+        pages, _ = await ntn.search(query, page_size=100)
+        # Database rows can hold pages too, but are rarely meant as a parent.
+        return [Location.inside(p, self._path_of(p)) for p in pages if not p.is_entry]
 
     def action_new(self) -> None:
         def chosen(new: NewPage | None) -> None:
             if new:
                 self.create_page(new)
 
-        self.push_screen(NewPageScreen(self._nearby_locations(), self._path_of), chosen)
+        nearby = nearby_locations(self.current, self.cache.ancestry(self.current.id)) if self.current else []
+        self.push_screen(NewPageScreen(nearby, self._find_parents), chosen)
 
     @work(group="create")
     async def create_page(self, new: NewPage) -> None:
@@ -817,13 +828,10 @@ class NotionTUI(App):
             self.notify(str(err), title="Could not create the page", severity="error")
             return
         self.cache.upsert_pages([page])
+        self.cache.put_nodes([Node(page.id, "page", page.title, page.parent_kind, page.parent_id)])
+        self._created = page
         await self._show_pages([page, *(p for p in self.loaded if p.id != page.id)], keep_id=page.id)
-        with self.suspend():
-            code = ntn.run_interactive("pages", "edit", page.id)
-        if code != 0:
-            self.notify(f"ntn pages edit exited with status {code}", severity="warning")
-        self.cache.invalidate(page.id)
-        self.load_list(self.query_text)
+        self._edit_in_editor(page)
 
     def action_trash(self) -> None:
         page = self.current
@@ -844,6 +852,8 @@ class NotionTUI(App):
             self.notify(str(err), title="ntn trash failed", severity="error")
             return
         self.cache.forget(page.id)
+        if self._created and self._created.id == page.id:
+            self._created = None
         index = next((i for i, p in enumerate(self.shown) if p.id == page.id), 0)
         await self._show_pages([p for p in self.loaded if p.id != page.id], fallback_index=index)
         self.notify(f"Trashed “{page.title}”")
