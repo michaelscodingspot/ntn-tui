@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 
 from rich.text import Text
 from textual import work
@@ -24,7 +23,8 @@ from textual.widgets import (
 
 from .database import sort_level_name
 from .links import Link, notion_id
-from .ntn import NtnError, Page
+from .new_page import Location, NewPage
+from .ntn import NtnError
 from .options import DATABASE_ENTRIES, Options
 
 
@@ -115,50 +115,6 @@ class PickList(ListView):
     ]
 
 
-@dataclass(frozen=True)
-class Location:
-    """Where a new page goes: inside a page, database or data source, or at the top level."""
-
-    label: str  # "Inside: Notes / Quick Notes"
-    parent_kind: str  # page | database | data_source | workspace
-    parent_id: str  # "" for the workspace
-
-    @classmethod
-    def inside(cls, page: Page, path: str) -> Location:
-        """Inside a list item; a database is shown as its data source, so it gets the rows' parent."""
-        kind = "data_source" if page.kind == "data_source" else "page"
-        return cls(f"Inside: {path}", kind, page.id)
-
-
-def page_path(page: Page, ancestry: tuple[list[str], tuple[str, str] | None]) -> str:
-    """"Notes / Quick Notes" from the cached ancestry; "… / Quick Notes" when it isn't all cached."""
-    titles, missing = ancestry
-    if missing is not None and page.parent_kind != "workspace":
-        titles = ["…"]
-    return " / ".join([*titles, page.title])
-
-
-TOP_LEVEL = Location("Top level of the workspace", "workspace", "")
-
-
-def nearby_locations(page: Page | None, ancestry: tuple[list[str], tuple[str, str] | None]) -> list[Location]:
-    """Where a new page can go: inside the highlighted page, next to it, and always the top level."""
-    if page is None:
-        return [TOP_LEVEL]
-    locations = [Location.inside(page, page_path(page, ancestry))]
-    if page.parent_kind in ("page", "database", "data_source"):
-        titles, missing = ancestry
-        where = " / ".join(titles) if missing is None and titles else "its parent"
-        locations.append(Location(f"Next to “{page.title}”: in {where}", page.parent_kind, page.parent_id))
-    return [*locations, TOP_LEVEL]
-
-
-@dataclass(frozen=True)
-class NewPage:
-    title: str
-    location: Location
-
-
 LOCATION_SEARCH_DEBOUNCE = 0.4
 
 
@@ -200,9 +156,9 @@ class NewPageScreen(ModalScreen[NewPage | None]):
 
     async def on_mount(self) -> None:
         self.query_one("#newpage").border_title = "New page"
-        await self._show_locations(self.nearby, "")
+        await self._show_locations(self.nearby)
 
-    async def _show_locations(self, locations: list[Location], empty: str) -> None:
+    async def _show_locations(self, locations: list[Location], empty: str = "") -> None:
         self.locations = locations
         pick = self.query_one(PickList)
         await pick.clear()
@@ -222,7 +178,7 @@ class NewPageScreen(ModalScreen[NewPage | None]):
         self.workers.cancel_group(self, "where")
         query = event.value.strip()
         if not query:
-            await self._show_locations(self.nearby, "")
+            await self._show_locations(self.nearby)
             return
         # Drop the old rows at once, so a stale place can't be picked while the search runs.
         await self._show_locations([], "searching…")

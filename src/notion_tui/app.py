@@ -33,14 +33,11 @@ from .links import Link, notion_id, notion_links_to_markdown, page_links, same_f
 from .modals import (
     ConfirmScreen,
     LinkPickScreen,
-    Location,
-    NewPage,
     NewPageScreen,
     OptionsScreen,
     SortScreen,
-    nearby_locations,
-    page_path,
 )
+from .new_page import Location, NewPage, nearby_locations, page_path, with_unindexed
 from .ntn import Node, NtnError, Page, View
 from .options import Options
 
@@ -214,6 +211,7 @@ class NotionTUI(App):
         self._link_history: list[Page] = []  # pages left by following a link, newest last
         self._people: dict[str, dict[str, str]] = {}  # data source → person name → user ID, seen in its rows
         self._created: Page | None = None  # page made here that Notion's search may not list yet
+        self._created_during = ""  # the search that was active when it was made
 
     # ---------- layout ----------
 
@@ -256,14 +254,15 @@ class NotionTUI(App):
         self.query_one("#status", Static).update(label)
 
     def _visible(self, pages: list[Page]) -> list[Page]:
-        """Apply the database entries option."""
+        """Apply the database entries option. A row just created here stays visible."""
         mode = self.options.database_entries
         if mode == "yes":
             return pages
+        created = self._created.id if self._created else None
         if mode == "never":
-            return [p for p in pages if not p.is_entry]
+            return [p for p in pages if not p.is_entry or p.id == created]
         bodies = self.cache.has_body([p.id for p in pages if p.is_entry])
-        return [p for p in pages if not p.is_entry or bodies[p.id]]
+        return [p for p in pages if not p.is_entry or bodies[p.id] or p.id == created]
 
     def _unchecked_entries(self) -> list[Page]:
         if self.options.database_entries != "show-non-empty":
@@ -338,12 +337,8 @@ class NotionTUI(App):
         if query != self.query_text:
             return  # the user typed something else meanwhile
         self.cache.upsert_pages(pages)
-        if self._created and not more:
-            # Notion's search lags a few seconds behind a new page: keep it on top until it shows up.
-            if any(p.id == self._created.id for p in pages):
-                self._created = None
-            else:
-                pages = [self._created, *pages]
+        if not more:
+            pages, self._created = with_unindexed(pages, self._created, query, self._created_during)
         self.next_cursor = next_cursor
         if more:
             await self._append_pages(pages)
@@ -831,7 +826,8 @@ class NotionTUI(App):
             if new:
                 self.create_page(new)
 
-        nearby = nearby_locations(self.current, self.cache.ancestry(self.current.id)) if self.current else []
+        ancestry = self.cache.ancestry(self.current.id) if self.current else ([], None)
+        nearby = nearby_locations(self.current, ancestry)  # the top level is always offered
         self.push_screen(NewPageScreen(nearby, self._find_parents), chosen)
 
     @work(group="create")
@@ -845,8 +841,8 @@ class NotionTUI(App):
             return
         self.cache.upsert_pages([page])
         self.cache.put_nodes([Node(page.id, "page", page.title, page.parent_kind, page.parent_id)])
-        self._created = page
-        await self._show_pages([page, *(p for p in self.loaded if p.id != page.id)], keep_id=page.id)
+        self._created, self._created_during = page, self.query_text
+        await self._go_to(page)
         self._edit_in_editor(page)
 
     def action_trash(self) -> None:

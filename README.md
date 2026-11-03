@@ -58,6 +58,18 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `?`            | help panel                               |
 | `q`            | quit                                     |
 
+## New page
+
+`n` asks for a title and a place in the tree, creates the page there, then opens it in
+`$EDITOR` for the body. The place list offers:
+
+- **Inside** the highlighted page (or database: the page becomes a row),
+- **Next to** it, in its parent,
+- **Top level of the workspace** (always there; this is how to create at the root).
+
+Typing in the location search swaps the list for matching pages and databases; `esc`
+clears the search and brings the list back, a second `esc` cancels.
+
 ## Databases
 
 Links in the preview are coloured and clickable. Following a link (`l`, or a click) shows a

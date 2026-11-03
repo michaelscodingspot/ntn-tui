@@ -1,6 +1,12 @@
 """New page: parent choices near the highlighted page, and the v1/pages request body."""
 
-from notion_tui.modals import TOP_LEVEL, Location, nearby_locations, page_path
+from notion_tui.new_page import (
+    TOP_LEVEL,
+    Location,
+    nearby_locations,
+    page_path,
+    with_unindexed,
+)
 from notion_tui.ntn import Page, new_page_body
 
 COMPLETE = (["Notes"], None)
@@ -66,3 +72,31 @@ def test_body_title_is_plain_text():
     title = 'Plan: "Q4" — שלום'
     prop = new_page_body(title, "page", "x")["properties"]["title"]
     assert prop == {"title": [{"type": "text", "text": {"content": title}}]}
+
+
+NEW = Page("new", "Plan Q4", "", "")
+OTHER = Page("other", "Tailscale", "", "")
+
+
+def test_unindexed_page_kept_on_recent_list():
+    assert with_unindexed([OTHER], NEW, "") == ([NEW, OTHER], NEW)
+
+
+def test_unindexed_page_shown_on_matching_search():
+    assert with_unindexed([OTHER], NEW, "plan") == ([NEW, OTHER], NEW)
+
+
+def test_unindexed_page_not_added_to_unrelated_search_but_still_kept():
+    assert with_unindexed([OTHER], NEW, "tail") == ([OTHER], NEW)
+
+
+def test_unindexed_page_kept_on_the_search_it_was_made_during():
+    assert with_unindexed([OTHER], NEW, "tail", created_during="tail") == ([NEW, OTHER], NEW)
+
+
+def test_indexed_page_released():
+    assert with_unindexed([NEW, OTHER], NEW, "") == ([NEW, OTHER], None)
+
+
+def test_nothing_created():
+    assert with_unindexed([OTHER], None, "") == ([OTHER], None)
