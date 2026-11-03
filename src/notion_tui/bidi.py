@@ -56,10 +56,11 @@ def _parser() -> MarkdownIt:
 
 
 class BidiMarkdown(Markdown):
-    """Markdown that right-aligns RTL blocks and keeps Notion's single line breaks."""
+    """Markdown that right-aligns RTL blocks, keeps Notion's single line breaks and colours links."""
 
     DEFAULT_CSS = """
     BidiMarkdown .rtl { text-align: right; }
+    BidiMarkdown MarkdownBlock { link-color: $text-accent; link-style: underline; link-color-hover: $accent; }
     """
 
     def __init__(self, *args, **kwargs) -> None:
