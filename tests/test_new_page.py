@@ -1,6 +1,6 @@
 """New page: parent choices near the highlighted page, and the v1/pages request body."""
 
-from notion_tui.modals import Location, nearby_locations, page_path
+from notion_tui.modals import TOP_LEVEL, Location, nearby_locations, page_path
 from notion_tui.ntn import Page, new_page_body
 
 COMPLETE = (["Notes"], None)
@@ -23,14 +23,15 @@ def test_path_of_top_level_page_has_no_marker():
     assert page_path(page(parent_kind="workspace", parent_id=""), UNCACHED) == "Quick Notes"
 
 
-def test_nothing_highlighted():
-    assert nearby_locations(None, COMPLETE) == []
+def test_nothing_highlighted_offers_top_level():
+    assert nearby_locations(None, COMPLETE) == [TOP_LEVEL]
 
 
 def test_inside_and_next_to_a_page():
     assert nearby_locations(page(), COMPLETE) == [
         Location("Inside: Notes / Quick Notes", "page", "p1"),
         Location("Next to “Quick Notes”: in Notes", "page", "p0"),
+        TOP_LEVEL,
     ]
 
 
@@ -42,9 +43,9 @@ def test_database_row_goes_next_to_in_the_database():
     assert nearby_locations(page(parent_kind="database", parent_id="db"), COMPLETE)[1].parent_kind == "database"
 
 
-def test_top_level_and_block_children_offer_only_inside():
+def test_top_level_and_block_children_offer_inside_and_top_level():
     for parent_kind in ("workspace", "block"):
-        assert len(nearby_locations(page(parent_kind=parent_kind), COMPLETE)) == 1
+        assert nearby_locations(page(parent_kind=parent_kind), COMPLETE)[1:] == [TOP_LEVEL]
 
 
 def test_database_is_entered_through_its_data_source():
@@ -55,6 +56,10 @@ def test_database_is_entered_through_its_data_source():
 def test_body_per_parent_kind():
     for kind, key in (("page", "page_id"), ("database", "database_id"), ("data_source", "data_source_id")):
         assert new_page_body("T", kind, "x")["parent"] == {"type": key, key: "x"}
+
+
+def test_body_for_top_level():
+    assert new_page_body("T", "workspace", "")["parent"] == {"type": "workspace", "workspace": True}
 
 
 def test_body_title_is_plain_text():

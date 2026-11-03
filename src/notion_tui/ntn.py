@@ -298,10 +298,14 @@ _PARENT_KEYS = {"page": "page_id", "database": "database_id", "data_source": "da
 
 
 def new_page_body(title: str, parent_kind: str, parent_id: str) -> dict:
-    """`v1/pages` request body: an empty page with a title under a page, database or data source."""
-    key = _PARENT_KEYS[parent_kind]
+    """`v1/pages` request body: an empty page with a title under a page, database, data source or the workspace."""
+    if parent_kind == "workspace":
+        parent = {"type": "workspace", "workspace": True}
+    else:
+        key = _PARENT_KEYS[parent_kind]
+        parent = {"type": key, key: parent_id}
     return {
-        "parent": {"type": key, key: parent_id},
+        "parent": parent,
         # "title" is the title property's ID in every database, and the only property of a plain page.
         "properties": {"title": {"title": [{"type": "text", "text": {"content": title}}]}},
     }

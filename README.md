@@ -119,7 +119,8 @@ the hidden ones.
   databases), `ntn api v1/data_sources/<id>/query` for database rows,
   `ntn api v1/views?data_source_id=<id>` and `v1/views/<id>` for a database's views,
   `ntn api v1/data_sources/<id>` for its properties,
-  `ntn api v1/pages` to create a titled page under its chosen parent (page, database),
+  `ntn api v1/pages` to create a titled page under its chosen parent (page, database, or the
+  workspace top level),
   `ntn pages get/edit/trash` for page actions.
 - Calls run in the background; the screen never waits on Notion.
 - Right-to-left text (Hebrew, Arabic): the terminal (kitty, VTE) puts RTL characters in

@@ -116,11 +116,11 @@ class PickList(ListView):
 
 @dataclass(frozen=True)
 class Location:
-    """Where a new page goes: inside a page, database or data source."""
+    """Where a new page goes: inside a page, database or data source, or at the top level."""
 
     label: str  # "Inside: Notes / Quick Notes"
-    parent_kind: str  # page | database | data_source
-    parent_id: str
+    parent_kind: str  # page | database | data_source | workspace
+    parent_id: str  # "" for the workspace
 
     @classmethod
     def inside(cls, page: Page, path: str) -> Location:
@@ -137,16 +137,19 @@ def page_path(page: Page, ancestry: tuple[list[str], tuple[str, str] | None]) ->
     return " / ".join([*titles, page.title])
 
 
+TOP_LEVEL = Location("Top level of the workspace", "workspace", "")
+
+
 def nearby_locations(page: Page | None, ancestry: tuple[list[str], tuple[str, str] | None]) -> list[Location]:
-    """Where a new page can go near the highlighted page: inside it, then next to it."""
+    """Where a new page can go: inside the highlighted page, next to it, and always the top level."""
     if page is None:
-        return []
+        return [TOP_LEVEL]
     locations = [Location.inside(page, page_path(page, ancestry))]
     if page.parent_kind in ("page", "database", "data_source"):
         titles, missing = ancestry
         where = " / ".join(titles) if missing is None and titles else "its parent"
         locations.append(Location(f"Next to “{page.title}”: in {where}", page.parent_kind, page.parent_id))
-    return locations
+    return [*locations, TOP_LEVEL]
 
 
 @dataclass(frozen=True)
@@ -156,7 +159,6 @@ class NewPage:
 
 
 LOCATION_SEARCH_DEBOUNCE = 0.4
-_NO_NEARBY = "No place near the highlighted page. Search for a parent."
 
 
 class NewPageScreen(ModalScreen[NewPage | None]):
@@ -197,7 +199,7 @@ class NewPageScreen(ModalScreen[NewPage | None]):
 
     async def on_mount(self) -> None:
         self.query_one("#newpage").border_title = "New page"
-        await self._show_locations(self.nearby, _NO_NEARBY)
+        await self._show_locations(self.nearby, "")
 
     async def _show_locations(self, locations: list[Location], empty: str) -> None:
         self.locations = locations
@@ -219,7 +221,7 @@ class NewPageScreen(ModalScreen[NewPage | None]):
         self.workers.cancel_group(self, "where")
         query = event.value.strip()
         if not query:
-            await self._show_locations(self.nearby, _NO_NEARBY)
+            await self._show_locations(self.nearby, "")
             return
         # Drop the old rows at once, so a stale place can't be picked while the search runs.
         await self._show_locations([], "searching…")
