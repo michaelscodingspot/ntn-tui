@@ -1,4 +1,4 @@
-"""Modal dialogs: trash confirmation, options, and the database sort picker."""
+"""Modal dialogs: trash confirmation, options, the database sort picker and the link picker."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Label, ListItem, ListView, RadioButton, RadioSet
 
 from .database import sort_level_name
+from .links import Link, notion_id
 from .options import DATABASE_ENTRIES, Options
 
 
@@ -234,6 +235,44 @@ class SortScreen(ModalScreen[list | None]):
 
     def action_apply(self) -> None:
         self.dismiss(self.levels)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class LinkPickScreen(ModalScreen[Link | None]):
+    """Choose one of the page's links or images. Returns it."""
+
+    AUTO_FOCUS = "PickList"
+    BINDINGS = [Binding("escape,q,l", "cancel", "cancel")]
+    DEFAULT_CSS = """
+    LinkPickScreen { align: center middle; }
+    #links { width: 80%; max-width: 100; height: auto; max-height: 80%; padding: 1 2; border: round $accent; background: $surface; }
+    #links PickList { height: auto; max-height: 20; background: transparent; }
+    #links ListItem { padding: 0 1; }
+    #links .hint { color: $text-muted; margin-top: 1; }
+    """
+
+    def __init__(self, links: list[Link]) -> None:
+        super().__init__()
+        self.links = links
+
+    def compose(self) -> ComposeResult:
+        def item(link: Link) -> ListItem:
+            where = "image" if link.image else "Notion" if notion_id(link.url) else link.url
+            text = Text.assemble(link.title, (f"  {where}", "dim"), no_wrap=True, overflow="ellipsis")
+            return ListItem(Label(text))
+
+        with Vertical(id="links"):
+            yield PickList(*(item(link) for link in self.links))
+            yield Label("j/k move · enter open · esc cancel", classes="hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#links").border_title = "Links and images"
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        event.stop()
+        self.dismiss(self.links[event.list_view.index or 0])
 
     def action_cancel(self) -> None:
         self.dismiss(None)

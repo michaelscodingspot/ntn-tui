@@ -1,19 +1,34 @@
-"""Open a Notion page in the default browser and bring that browser window to the front.
+"""Open a Notion page or web link in the default browser and bring that browser window to the front.
 
 GNOME on Wayland refuses focus requests from apps that aren't focused already, so a tab
 opened from the terminal lands in a background window. The "Window Calls" GNOME Shell
 extension (window-calls@domandoman.xyz) exposes window listing and activation over D-Bus;
 when it is installed we use it to raise the window showing the page. Without it, the page
 still opens, just without focus.
+
+A Notion page is found by its title. A web link's title isn't known in advance, so the
+browser window whose title changes (the new tab) or that appears after opening is raised.
+
+An image in a page is downloaded to ~/.cache/notion-tui/files and opened locally with the
+user's `x` script (falling back to xdg-open), so it shows in the image viewer, not the browser.
+A file not opened for 7 days is deleted the next time the app starts.
 """
 
 from __future__ import annotations
 
 import ast
 import asyncio
+import hashlib
 import json
+import shutil
 import subprocess
+import time
+import urllib.request
 import webbrowser
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from .links import file_name
 
 _WINDOWS = [
     "gdbus", "call", "--session",
@@ -22,6 +37,8 @@ _WINDOWS = [
 ]
 _RAISE_TIMEOUT = 5.0  # seconds to wait for the browser to show the page
 _POLL = 0.25
+FILES_DIR = Path.home() / ".cache" / "notion-tui" / "files"
+FILES_TTL_DAYS = 7  # downloaded files not opened for this long are deleted at startup
 
 
 def open_url(url: str) -> None:
@@ -80,3 +97,89 @@ async def raise_page_window(title: str) -> bool:
             return await _gdbus("Activate", str(match["id"])) is not None
         await asyncio.sleep(_POLL)
     return False
+
+
+def _browser_class() -> str:
+    """The default browser's window class, guessed from its desktop file: google-chrome.desktop → google-chrome."""
+    try:
+        out = subprocess.run(
+            ["xdg-settings", "get", "default-web-browser"], capture_output=True, text=True, timeout=2
+        ).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+    return out.strip().removesuffix(".desktop").casefold()
+
+
+def _is_browser(window: dict, browser: str) -> bool:
+    if not browser:
+        return True  # unknown browser: any window may be it
+    names = {(window.get("wm_class") or "").casefold(), (window.get("wm_class_instance") or "").casefold()}
+    return any(name and (name == browser or browser.endswith(name) or name.endswith(browser)) for name in names)
+
+
+async def open_and_raise(url: str) -> bool:
+    """Open a link in the browser and activate the browser window that shows it."""
+    browser = await asyncio.to_thread(_browser_class)
+    before = await _windows()
+    open_url(url)
+    if before is None:
+        return False  # extension not installed: the link opens without focus
+    titles = {w["id"]: w.get("title") for w in before}
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _RAISE_TIMEOUT
+    while loop.time() < deadline:
+        await asyncio.sleep(_POLL)
+        windows = await _windows() or []
+        changed = [
+            w for w in windows
+            if not w.get("focus") and _is_browser(w, browser) and titles.get(w["id"], object()) != w.get("title")
+        ]
+        if changed:
+            return await _gdbus("Activate", str(changed[0]["id"])) is not None
+    return False
+
+
+def _download(url: str) -> Path:
+    """Save the file to the files folder, once per file (the signature in the query is ignored)."""
+    parts = urlsplit(url)
+    key = hashlib.sha1(f"{parts.netloc}{parts.path}".encode()).hexdigest()[:12]
+    path = FILES_DIR / f"{key}-{file_name(url) or 'file'}"
+    if not path.exists():
+        FILES_DIR.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(url, timeout=30) as response:
+            data = response.read()
+        partial = path.with_suffix(path.suffix + ".part")
+        partial.write_bytes(data)
+        partial.replace(path)
+    else:
+        path.touch()  # opened again: restart its time to live
+    return path
+
+
+def prune_files() -> int:
+    """Delete downloaded files not opened for FILES_TTL_DAYS days. Returns how many were deleted."""
+    cutoff = time.time() - FILES_TTL_DAYS * 86400
+    deleted = 0
+    for path in FILES_DIR.glob("*") if FILES_DIR.is_dir() else ():
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                deleted += 1
+        except OSError:
+            pass
+    return deleted
+
+
+async def open_file(url: str) -> None:
+    """Download the file and open it locally with `x` (or xdg-open). Raises OSError when the
+    download fails, e.g. an expired Notion file link (HTTP 403)."""
+    path = await asyncio.to_thread(_download, url)
+    opener = shutil.which("x") or str(Path.home() / ".local" / "bin" / "x")
+    command = [opener if Path(opener).exists() else "xdg-open", str(path)]
+    subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )

@@ -100,6 +100,17 @@ class Cache:
         )
         return [Page(*row) for row in rows]
 
+    def find_page(self, notion_id: str) -> Page | None:
+        """The listed page or database a Notion link points at (ID as 32 hex digits). A database's
+        link carries the database's ID, which only its URL holds: the list shows its data source."""
+        row = self.db.execute(
+            "SELECT p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), p.kind "
+            "FROM pages p LEFT JOIN nodes n ON n.id = p.id "
+            "WHERE replace(p.id, '-', '') = ? OR replace(p.url, '-', '') LIKE ? LIMIT 1",
+            (notion_id, f"%{notion_id}"),
+        ).fetchone()
+        return Page(*row) if row else None
+
     def upsert_pages(self, pages: list[Page]) -> None:
         now = time.time()
         with self.db:
