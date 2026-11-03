@@ -29,7 +29,8 @@ from .database import (
     view_columns,
     view_label,
 )
-from .modals import ConfirmScreen, OptionsScreen, SortScreen
+from .links import Link, notion_id, notion_links_to_markdown, page_links
+from .modals import ConfirmScreen, LinkPickScreen, OptionsScreen, SortScreen
 from .ntn import NtnError, Page, View
 from .options import Options
 
@@ -42,8 +43,6 @@ VIEW_FETCHES = 2  # parallel ntn calls when fetching a database's views
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _PROPERTY = re.compile(r"^'?([^':][^:]*?)'?:\s*(.*)$")
 _BR = re.compile(r"<br\s*/?>")
-# Notion's page and database links: <page url="…">Title</page>, <database url="…" …>Title</database>
-_NOTION_LINK = re.compile(r'<(page|database)\b[^>]*?\burl="([^"]+)"[^>]*>(.*?)</\1>', re.S)
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
 _EMPTY_VALUES = {"", "null", "[]", "''", '""', "false"}
 
@@ -64,14 +63,8 @@ def split_page(md: str, title: str) -> tuple[list[tuple[str, str]], str]:
         md = md[match.end():]
     md = md.replace("<empty-block/>", "")
     md = _BR.sub("  \n", md)
-    md = _NOTION_LINK.sub(_markdown_link, md)
+    md = notion_links_to_markdown(md)
     return properties, md.strip()
-
-
-def _markdown_link(match: re.Match[str]) -> str:
-    url, title = match.group(2), match.group(3).strip() or "Untitled"
-    title = re.sub(r"([\\\[\]])", r"\\\1", title)
-    return f"[{title}]({url.replace(' ', '%20').replace(')', '%29')})"
 
 
 def _local(iso: str) -> datetime | None:
@@ -177,6 +170,8 @@ class NotionTUI(App):
         Binding("n", "new", "new"),
         Binding("d", "trash", "trash"),
         Binding("o", "browser", "open in Notion"),
+        Binding("l", "links", "links"),
+        Binding("backspace", "link_back", "back to linking page"),
         Binding("r", "refresh", "refresh"),
         Binding("comma", "options", "options"),
         Binding("left_square_bracket", "db_view(-1)", "prev view"),
@@ -205,6 +200,8 @@ class NotionTUI(App):
         self._search_timer: Timer | None = None
         self.db_rows: DbRows | None = None  # rows of the database being previewed
         self._meta_fresh: set[str] = set()  # data sources whose views and schema were fetched this session
+        self.links: list[Link] = []  # links in the page shown in the preview
+        self._link_history: list[Page] = []  # pages left by following a link, newest last
         self._people: dict[str, dict[str, str]] = {}  # data source → person name → user ID, seen in its rows
 
     # ---------- layout ----------
@@ -381,6 +378,8 @@ class NotionTUI(App):
 
     async def _render_message(self, text: str) -> None:
         self._rendered_id = None
+        self.links = []
+        self.refresh_bindings()
         self.query_one("#preview-pane").border_subtitle = ""
         self.query_one(Breadcrumb).parts = ()
         self._render_db_bar()
@@ -397,6 +396,8 @@ class NotionTUI(App):
             if properties:
                 content = "  \n".join(f"**{k}:** {v}" for k, v in properties) + "\n\n---\n\n" + content
         await self.query_one("#preview", Markdown).update(content)
+        self.links = page_links(content) if markdown is not None else []
+        self.refresh_bindings()
         if self._rendered_id != page.id:
             self.query_one(PreviewScroll).scroll_home(animate=False)
             self._rendered_id = page.id
@@ -630,6 +631,10 @@ class NotionTUI(App):
             if action == "db_more":
                 rows = self._current_rows()
                 return bool(rows and rows.cursor)
+        if action == "links":
+            return bool(self.links)
+        if action == "link_back":
+            return bool(self._link_history)
         return True
 
     def action_db_view(self, step: int) -> None:
@@ -831,7 +836,63 @@ class NotionTUI(App):
             self.check_bodies()
 
     def on_markdown_link_clicked(self, event: Markdown.LinkClicked) -> None:
-        desktop.open_url(event.href)
+        self.follow_link(Link(event.href, event.href))
+
+    # ---------- links ----------
+
+    def action_links(self) -> None:
+        if not self.links:
+            return
+
+        def chosen(link: Link | None) -> None:
+            if link:
+                self.follow_link(link)
+
+        self.push_screen(LinkPickScreen(self.links), chosen)
+
+    @work(exclusive=True, group="link")
+    async def follow_link(self, link: Link) -> None:
+        """Show a linked Notion page here; open any other link in the browser."""
+        page = await self._linked_page(link)
+        if page is None:
+            desktop.open_url(link.url)
+            return
+        if self.current and self.current.id != page.id:
+            self._link_history.append(self.current)
+        await self._go_to(page)
+
+    async def _linked_page(self, link: Link) -> Page | None:
+        hex_id = notion_id(link.url)
+        if hex_id is None:
+            return None
+        page = self.cache.find_page(hex_id)
+        if page:
+            return page
+        page_id = f"{hex_id[:8]}-{hex_id[8:12]}-{hex_id[12:16]}-{hex_id[16:20]}-{hex_id[20:]}"
+        try:
+            node = await ntn.get_node("page", page_id)
+        except NtnError:
+            return None  # a database not listed yet, or no access: Notion in the browser can show it
+        self.cache.put_nodes([node])
+        # last_edited unknown: the preview always fetches the content fresh.
+        return Page(page_id, node.title or link.title, "", link.url, node.parent_kind, node.parent_id)
+
+    async def _go_to(self, page: Page) -> None:
+        """Select the page in the list, adding it at the top when it isn't there."""
+        list_view = self.query_one(PageList)
+        ids = [p.id for p in self.shown]
+        if page.id not in ids:
+            self.loaded.insert(0, page)
+            self.shown.insert(0, page)
+            await list_view.insert(0, [PageItem(page)])
+            ids.insert(0, page.id)
+            list_view.index = None  # the cursor may already be on row 0: make the move below register
+        list_view.index = ids.index(page.id)
+        self.refresh_bindings()
+
+    def action_link_back(self) -> None:
+        if self._link_history:
+            self.call_later(self._go_to, self._link_history.pop())
 
     def action_browser(self) -> None:
         page = self.current

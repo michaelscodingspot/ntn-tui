@@ -46,6 +46,8 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `n`            | new page in `$EDITOR` (`ntn pages create`)|
 | `d`            | trash page (asks first)                  |
 | `o`            | open page in Notion web app, focus tab   |
+| `l`            | links in page: pick one to open          |
+| `backspace`    | back to the page a link came from        |
 | `r`            | refresh                                  |
 | `[` / `]`      | database: previous / next view           |
 | `f`            | database: filter line (enter / esc)      |
@@ -57,6 +59,10 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `q`            | quit                                     |
 
 ## Databases
+
+Links in the preview are coloured and clickable. Following a link (`l`, or a click) shows a
+Notion page or database right here, selected in the list (added at the top when not listed);
+any other link opens in the browser.
 
 The database keys act on the database highlighted in the list; focus stays there.
 
