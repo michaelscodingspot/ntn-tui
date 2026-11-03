@@ -144,6 +144,41 @@ class PreviewScroll(VerticalScroll, can_focus=True):
 
 
 
+def with_cached_tail(fresh: list[Page], cached: list[Page]) -> list[Page]:
+    """A first batch of recent pages, followed by the cached pages older than all of it."""
+    if not fresh:
+        return fresh
+    ids = {p.id for p in fresh}
+    oldest = min(p.last_edited for p in fresh)
+    return fresh + [p for p in cached if p.id not in ids and p.last_edited < oldest]
+
+
+def vanished(fresh: list[Page], cached: list[Page], complete: bool) -> list[Page]:
+    """Cached pages a first batch of recent pages proves gone (trashed, deleted or unshared in Notion).
+
+    The batch holds every page edited after its oldest one, so a cached page edited later that is missing
+    from it is gone; with `complete` (no further batch) every missing page is. Pages edited in the same
+    minute as the batch's oldest may still come in the next batch, so they are kept.
+    """
+    ids = {p.id for p in fresh}
+    if complete:
+        return [p for p in cached if p.id not in ids]
+    if not fresh:
+        return []
+    oldest = min(p.last_edited for p in fresh)
+    return [p for p in cached if p.id not in ids and p.last_edited > oldest]
+
+
+def same_rows(a: list[Page], b: list[Page]) -> bool:
+    """Both lists would draw the same rows: same pages, titles, kinds and edit times, in the same order."""
+    def key(p: Page) -> tuple[str, str, str, str]:
+        return (p.id, p.title, p.kind, p.last_edited)
+    return len(a) == len(b) and all(key(x) == key(y) for x, y in zip(a, b))
+
+
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
 class NotionTUI(App):
     TITLE = "notion-tui"
     CSS = """
@@ -202,6 +237,8 @@ class NotionTUI(App):
         self.query_text = ""  # active search ("" = recent pages)
         self.next_cursor: str | None = None  # Notion cursor for the next batch of the current list
         self._loading = 0
+        self._spin = 0  # frame of the loading spinner in the status line
+        self._spinner: Timer | None = None
         self._rendered_id: str | None = None
         self._preview_timer: Timer | None = None
         self._search_timer: Timer | None = None
@@ -250,8 +287,17 @@ class NotionTUI(App):
             count += f" · {hidden} entries hidden"
         label = f"“{self.query_text}” · {count}" if self.query_text else f"Recent · {count}"
         if self._loading:
-            label += " · loading…"
+            label = f"{SPINNER[self._spin % len(SPINNER)]} {label} · loading"
+            if self._spinner is None:
+                self._spinner = self.set_interval(0.1, self._spin_once)
+        elif self._spinner is not None:
+            self._spinner.stop()
+            self._spinner = None
         self.query_one("#status", Static).update(label)
+
+    def _spin_once(self) -> None:
+        self._spin += 1
+        self._update_status()
 
     def _visible(self, pages: list[Page]) -> list[Page]:
         """Apply the database entries option. A row just created here stays visible."""
@@ -280,7 +326,15 @@ class NotionTUI(App):
 
     async def _render_list(self, keep_id: str | None = None, fallback_index: int = 0) -> None:
         list_view = self.query_one(PageList)
-        pages = self.shown = self._visible(self.loaded)
+        pages = self._visible(self.loaded)
+        if pages and same_rows(pages, self.shown):
+            # Fresh data that draws the same rows (often the cached list, confirmed): rebuilding would blink.
+            self.shown = pages
+            for item, page in zip(list_view.query(PageItem), pages):
+                item.page = page
+            self._update_status()
+            return
+        self.shown = pages
         await list_view.clear()
         await list_view.extend(PageItem(p) for p in pages)
         if pages:
@@ -341,9 +395,21 @@ class NotionTUI(App):
             pages, self._created = with_unindexed(pages, self._created, query, self._created_during)
         self.next_cursor = next_cursor
         if more:
+            known = {p.id for p in self.loaded}
             await self._append_pages(pages)
-        else:
-            await self._show_pages(pages, keep_id=self.current.id if self.current else None)
+            if next_cursor and all(p.id in known for p in pages):
+                # Every page was already listed from the cache: no new row to scroll onto, so fetch on.
+                self.load_list(query, more=True)
+            return
+        if not query:
+            cached = self.cache.recent_pages()
+            for gone in vanished(pages, cached, complete=not next_cursor):
+                self.cache.forget(gone.id)  # so the next startup does not show it and then drop it
+            if next_cursor:
+                # Keep the cached pages older than this first batch, so the list does not shrink to one batch
+                # at startup or on refresh. Later batches skip the ones already listed.
+                pages = with_cached_tail(pages, cached)
+        await self._show_pages(pages, keep_id=self.current.id if self.current else None)
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         if not isinstance(event.item, PageItem):
