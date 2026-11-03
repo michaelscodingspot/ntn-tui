@@ -42,6 +42,8 @@ VIEW_FETCHES = 2  # parallel ntn calls when fetching a database's views
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _PROPERTY = re.compile(r"^'?([^':][^:]*?)'?:\s*(.*)$")
 _BR = re.compile(r"<br\s*/?>")
+# Notion's page and database links: <page url="…">Title</page>, <database url="…" …>Title</database>
+_NOTION_LINK = re.compile(r'<(page|database)\b[^>]*?\burl="([^"]+)"[^>]*>(.*?)</\1>', re.S)
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
 _EMPTY_VALUES = {"", "null", "[]", "''", '""', "false"}
 
@@ -62,7 +64,14 @@ def split_page(md: str, title: str) -> tuple[list[tuple[str, str]], str]:
         md = md[match.end():]
     md = md.replace("<empty-block/>", "")
     md = _BR.sub("  \n", md)
+    md = _NOTION_LINK.sub(_markdown_link, md)
     return properties, md.strip()
+
+
+def _markdown_link(match: re.Match[str]) -> str:
+    url, title = match.group(2), match.group(3).strip() or "Untitled"
+    title = re.sub(r"([\\\[\]])", r"\\\1", title)
+    return f"[{title}]({url.replace(' ', '%20').replace(')', '%29')})"
 
 
 def _local(iso: str) -> datetime | None:
@@ -214,7 +223,7 @@ class NotionTUI(App):
                 yield Input(placeholder="filter rows: prop:a,b  prop~text  prop>=2024  -prop:x  prop:empty  words…", id="dbquery", select_on_focus=False)
                 yield Static("", id="dberror", markup=False)
                 with PreviewScroll():
-                    yield BidiMarkdown("", id="preview")
+                    yield BidiMarkdown("", id="preview", open_links=False)
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -820,6 +829,9 @@ class NotionTUI(App):
         await self._render_list(keep_id=self.current.id if self.current else None)
         if self._unchecked_entries():
             self.check_bodies()
+
+    def on_markdown_link_clicked(self, event: Markdown.LinkClicked) -> None:
+        desktop.open_url(event.href)
 
     def action_browser(self) -> None:
         page = self.current
