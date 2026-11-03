@@ -162,6 +162,16 @@ def vanished(fresh: list[Page], cached: list[Page], complete: bool) -> list[Page
     return [p for p in cached if p.id not in ids and p.last_edited > oldest]
 
 
+def same_rows(a: list[Page], b: list[Page]) -> bool:
+    """Both lists would draw the same rows: same pages, titles, kinds and edit times, in the same order."""
+    def key(p: Page) -> tuple[str, str, str, str]:
+        return (p.id, p.title, p.kind, p.last_edited)
+    return len(a) == len(b) and all(key(x) == key(y) for x, y in zip(a, b))
+
+
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
 class NotionTUI(App):
     TITLE = "notion-tui"
     CSS = """
@@ -220,6 +230,8 @@ class NotionTUI(App):
         self.query_text = ""  # active search ("" = recent pages)
         self.next_cursor: str | None = None  # Notion cursor for the next batch of the current list
         self._loading = 0
+        self._spin = 0  # frame of the loading spinner in the status line
+        self._spinner: Timer | None = None
         self._rendered_id: str | None = None
         self._preview_timer: Timer | None = None
         self._search_timer: Timer | None = None
@@ -266,8 +278,17 @@ class NotionTUI(App):
             count += f" · {hidden} entries hidden"
         label = f"“{self.query_text}” · {count}" if self.query_text else f"Recent · {count}"
         if self._loading:
-            label += " · loading…"
+            label = f"{SPINNER[self._spin % len(SPINNER)]} {label} · loading"
+            if self._spinner is None:
+                self._spinner = self.set_interval(0.1, self._spin_once)
+        elif self._spinner is not None:
+            self._spinner.stop()
+            self._spinner = None
         self.query_one("#status", Static).update(label)
+
+    def _spin_once(self) -> None:
+        self._spin += 1
+        self._update_status()
 
     def _visible(self, pages: list[Page]) -> list[Page]:
         """Apply the database entries option."""
@@ -295,7 +316,15 @@ class NotionTUI(App):
 
     async def _render_list(self, keep_id: str | None = None, fallback_index: int = 0) -> None:
         list_view = self.query_one(PageList)
-        pages = self.shown = self._visible(self.loaded)
+        pages = self._visible(self.loaded)
+        if pages and same_rows(pages, self.shown):
+            # Fresh data that draws the same rows (often the cached list, confirmed): rebuilding would blink.
+            self.shown = pages
+            for item, page in zip(list_view.query(PageItem), pages):
+                item.page = page
+            self._update_status()
+            return
+        self.shown = pages
         await list_view.clear()
         await list_view.extend(PageItem(p) for p in pages)
         if pages:
