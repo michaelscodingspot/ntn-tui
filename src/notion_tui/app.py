@@ -323,8 +323,14 @@ class NotionTUI(App):
         self.next_cursor = next_cursor
         if more:
             await self._append_pages(pages)
-        else:
-            await self._show_pages(pages, keep_id=self.current.id if self.current else None)
+            return
+        if not query and next_cursor and pages:
+            # Keep the cached pages older than this first batch, so the list does not shrink to one batch
+            # at startup or on refresh. Later batches skip the ones already listed.
+            fresh = {p.id for p in pages}
+            oldest = min(p.last_edited for p in pages)
+            pages = pages + [p for p in self.cache.recent_pages() if p.id not in fresh and p.last_edited < oldest]
+        await self._show_pages(pages, keep_id=self.current.id if self.current else None)
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         if not isinstance(event.item, PageItem):
