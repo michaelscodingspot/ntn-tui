@@ -186,3 +186,14 @@ def test_combine_rejects_deep_view_filter_plus_terms():
     assert combine(deep, []) == deep
     with pytest.raises(QueryError, match="too complex"):
         combine(deep, parse("milk", SCHEMA))
+
+
+def test_empty_and_not_empty():
+    assert parse("area:empty", SCHEMA) == [{"property": "~YDn", "select": {"is_empty": True}}]
+    assert parse("-due:EMPTY", SCHEMA) == [{"property": "=cGt", "date": {"is_not_empty": True}}]
+    assert parse("rel:empty", SCHEMA) == [{"property": "rel", "relation": {"is_empty": True}}]
+    assert parse("assignee=empty", SCHEMA) == [{"property": "who", "people": {"is_empty": True}}]
+    assert parse("done?:empty", SCHEMA) == [{"property": "dn", "checkbox": {"equals": False}}]
+    assert parse('notes:"empty"', SCHEMA) == [{"property": "nt", "rich_text": {"contains": "empty"}}]
+    with pytest.raises(QueryError, match="not Estimate<empty"):
+        parse("est<empty", SCHEMA)

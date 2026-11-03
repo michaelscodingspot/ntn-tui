@@ -8,6 +8,7 @@ Syntax: space-separated terms, all of which must match (AND). A leading `-` nega
     prop=v        equals (text, number, date)
     prop<v  prop>v  prop<=v  prop>=v
                   number and date comparisons; dates are YYYY, YYYY-MM or YYYY-MM-DD
+    prop:empty    property has no value (-prop:empty: has a value); prop:"empty" is the literal word
     word          title contains word
 
 Property names are case-insensitive and may be shortened to any unambiguous part
@@ -25,6 +26,9 @@ CHOICES = {"select", "status", "multi_select"}
 OPERATORS = ("<=", ">=", ":", "~", "<", ">", "=")
 _TRUE = {"yes", "true", "1", "checked", "y", "x"}
 _FALSE = {"no", "false", "0", "unchecked", "n"}
+# Kinds Notion can test for is_empty / is_not_empty (checkbox: empty means unchecked).
+EMPTIABLE = TEXT | DATES | CHOICES | {"number", "people", "relation", "files"}
+EMPTY_WORD = "empty"
 _NEGATE = {"<": ">=", "<=": ">", ">": "<=", ">=": "<"}  # a negated comparison flips
 MAX_NESTING = 2  # Notion accepts and/or nested at most two levels deep
 
@@ -203,8 +207,22 @@ def _date_term(prop: dict, op: str, period: tuple[date, date], negated: bool) ->
     return [_cond(prop, {"on_or_after": lo}), _cond(prop, {"before": hi})]
 
 
+def _empty_term(prop: dict, op: str, negated: bool) -> list[dict]:
+    """prop:empty (no value) or -prop:empty (has a value)."""
+    kind, label = prop["type"], prop["name"].strip()
+    if op not in (":", "="):
+        raise QueryError(f"use {label}:empty or -{label}:empty, not {label}{op}empty")
+    if kind == "checkbox":
+        return [_cond(prop, {"equals": negated})]
+    if kind not in EMPTIABLE:
+        raise QueryError(f"can't test {kind} property {label} for empty")
+    return [_cond(prop, {"is_not_empty" if negated else "is_empty": True})]
+
+
 def _term(prop: dict, op: str, raw: str, negated: bool, people: dict[str, str]) -> list[dict]:
     kind, label = prop["type"], prop["name"].strip()
+    if raw.strip().lower() == EMPTY_WORD:  # unquoted only: prop:"empty" stays a value
+        return _empty_term(prop, op, negated)
     values = [_unquote(v).strip() for v in _split_unquoted(raw, ",")]
     values = [v for v in values if v]
     if not values:

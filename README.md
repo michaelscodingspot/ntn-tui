@@ -80,6 +80,7 @@ Space-separated terms, all of which must match. `-` in front negates a term.
 | `prop=v`          | equals (text, number, date)                                |
 | `prop<v` `prop>=v`| number or date compare (`<` `>` `<=` `>=`)                 |
 | `-prop:a`         | not a                                                      |
+| `prop:empty`      | property has no value (`-prop:empty`: has a value)         |
 
 - Property names ignore case and may be cut to any unambiguous part: `pri:1`, or
   `created>=2026` for "Date Created" (start, then start of a word, then anywhere in it).
@@ -87,6 +88,8 @@ Space-separated terms, all of which must match. `-` in front negates a term.
   `due<=2024` is up to the end of 2024. Back-to-back dates join (`due:2024-01,2024-02`);
   separate ones (`due:2024,2026`) must be the only term on a view with no filter, since
   Notion nests and/or only two levels deep.
+- `empty` works on every property type except formula, rollup and unique ID; on a
+  checkbox it means unchecked. To match the word itself, quote it: `notes:"empty"`.
 - Names or values with spaces go in double quotes: `"due date">=2024 area:"side project"`.
 - People are matched by name, from the people seen in the database's rows this session.
 - The filter is added to the view's own filter (AND). A mistake shows a message under the
