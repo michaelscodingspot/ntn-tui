@@ -1,15 +1,22 @@
-"""Modal dialogs: trash confirmation, options, and the database sort picker."""
+"""Modal dialogs: trash confirmation, options, new page, and the database sort picker."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
 from rich.text import Text
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Label, ListItem, ListView, RadioButton, RadioSet
+from textual.timer import Timer
+from textual.widgets import Button, Input, Label, ListItem, ListView, RadioButton, RadioSet
 
+from . import ntn
 from .database import sort_level_name
+from .ntn import NtnError, Page
 from .options import DATABASE_ENTRIES, Options
 
 
@@ -93,15 +100,136 @@ class OptionsScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
-# Property types a database can be sorted by.
-_UNSORTABLE_TYPES = {"relation", "rollup", "files", "button"}
-
-
 class PickList(ListView):
     BINDINGS = [
         Binding("j", "cursor_down", "down", show=False),
         Binding("k", "cursor_up", "up", show=False),
     ]
+
+
+@dataclass(frozen=True)
+class Location:
+    """Where a new page goes: inside a page, database or data source."""
+
+    label: str  # "Inside: Notes / Quick Notes"
+    parent_kind: str  # page | database | data_source
+    parent_id: str
+
+
+@dataclass(frozen=True)
+class NewPage:
+    title: str
+    location: Location
+
+
+LOCATION_SEARCH_DEBOUNCE = 0.4
+
+
+class NewPageScreen(ModalScreen[NewPage | None]):
+    """Ask for a new page's title and where in the tree it goes.
+
+    The location list starts with places near the highlighted page; typing in the
+    location search replaces it with matching pages and databases from Notion.
+    """
+
+    AUTO_FOCUS = "#title"
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+    DEFAULT_CSS = """
+    NewPageScreen { align: center middle; }
+    #newpage { width: 80; height: auto; max-height: 90%; padding: 1 2; border: round $accent; background: $surface; }
+    #newpage Input { margin-bottom: 1; }
+    #newpage PickList { height: auto; max-height: 14; background: transparent; }
+    #newpage ListItem { padding: 0 1; }
+    #newpage .empty, #newpage .hint { color: $text-muted; }
+    #newpage .hint { margin-top: 1; }
+    """
+
+    def __init__(self, nearby: list[Location], path_of: Callable[[Page], str]) -> None:
+        super().__init__()
+        self.nearby = nearby
+        self.path_of = path_of  # "Notes / Quick Notes" for a page, from the cache
+        self.locations: list[Location] = []
+        self._search_timer: Timer | None = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="newpage"):
+            yield Label("Title")
+            yield Input(placeholder="page title", id="title")
+            yield Label("Location")
+            yield Input(placeholder="search for another parent page or database…", id="where")
+            yield PickList()
+            yield Label("", classes="empty")
+            yield Label("tab next field · j/k move · enter create · esc cancel", classes="hint")
+
+    async def on_mount(self) -> None:
+        self.query_one("#newpage").border_title = "New page"
+        await self._show_locations(self.nearby, "No place near the highlighted page. Search for a parent.")
+
+    async def _show_locations(self, locations: list[Location], empty: str) -> None:
+        self.locations = locations
+        pick = self.query_one(PickList)
+        await pick.clear()
+        await pick.extend(ListItem(Label(loc.label, markup=False)) for loc in locations)
+        if locations:
+            pick.index = 0
+        empty_label = self.query_one(".empty", Label)
+        empty_label.update(empty)
+        empty_label.display = not locations
+
+    def _location(self, page: Page) -> Location:
+        kind = "data_source" if page.kind == "data_source" else "page"
+        return Location(f"Inside: {self.path_of(page)}", kind, page.id)
+
+    async def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "where":
+            return
+        event.stop()
+        if self._search_timer:
+            self._search_timer.stop()
+        query = event.value.strip()
+        if not query:
+            self.workers.cancel_group(self, "where")
+            await self._show_locations(self.nearby, "No place near the highlighted page. Search for a parent.")
+            return
+        self.query_one(".empty", Label).update("searching…")
+        self._search_timer = self.set_timer(LOCATION_SEARCH_DEBOUNCE, lambda: self.search(query))
+
+    @work(exclusive=True, group="where")
+    async def search(self, query: str) -> None:
+        try:
+            pages, _ = await ntn.search(query, page_size=25)
+        except NtnError as err:
+            await self._show_locations([], f"Search failed: {err}")
+            return
+        if self.query_one("#where", Input).value.strip() != query:
+            return  # typed on meanwhile
+        # Database rows can hold pages too, but are rarely meant as a parent.
+        await self._show_locations([self._location(p) for p in pages if not p.is_entry], f"Nothing matches “{query}”.")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.query_one(PickList).focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        event.stop()
+        self._create(event.list_view.index or 0)
+
+    def _create(self, index: int) -> None:
+        if not self.locations:
+            return
+        title = self.query_one("#title", Input).value.strip()
+        if not title:
+            self.notify("Give the page a title first.", severity="warning")
+            self.query_one("#title", Input).focus()
+            return
+        self.dismiss(NewPage(title, self.locations[index]))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# Property types a database can be sorted by.
+_UNSORTABLE_TYPES = {"relation", "rollup", "files", "button"}
 
 
 class PropertyPickScreen(ModalScreen[str | None]):

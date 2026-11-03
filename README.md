@@ -43,7 +43,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `tab`          | cycle search → list → preview            |
 | `/`            | search (instant from cache, then Notion) |
 | `e`            | edit page in `$EDITOR` (`ntn pages edit`)|
-| `n`            | new page in `$EDITOR` (`ntn pages create`)|
+| `n`            | new page: title and place, then `$EDITOR` |
 | `d`            | trash page (asks first)                  |
 | `o`            | open page in Notion web app, focus tab   |
 | `r`            | refresh                                  |
@@ -119,7 +119,8 @@ the hidden ones.
   databases), `ntn api v1/data_sources/<id>/query` for database rows,
   `ntn api v1/views?data_source_id=<id>` and `v1/views/<id>` for a database's views,
   `ntn api v1/data_sources/<id>` for its properties,
-  `ntn pages get/edit/create/trash` for page actions.
+  `ntn api v1/pages` to create a titled page under its chosen parent (page, database),
+  `ntn pages get/edit/trash` for page actions.
 - Calls run in the background; the screen never waits on Notion.
 - Right-to-left text (Hebrew, Arabic): the terminal (kitty, VTE) puts RTL characters in
   order; the preview right-aligns paragraphs whose first letter is RTL, as Notion does.

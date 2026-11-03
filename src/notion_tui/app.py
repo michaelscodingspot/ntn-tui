@@ -29,7 +29,7 @@ from .database import (
     view_columns,
     view_label,
 )
-from .modals import ConfirmScreen, OptionsScreen, SortScreen
+from .modals import ConfirmScreen, Location, NewPage, NewPageScreen, OptionsScreen, SortScreen
 from .ntn import NtnError, Page, View
 from .options import Options
 
@@ -780,11 +780,49 @@ class NotionTUI(App):
         self.cache.invalidate(page.id)
         self.load_list(self.query_text)
 
+    def _path_of(self, page: Page) -> str:
+        """"Notes / Quick Notes" from the cache; "… / Quick Notes" when ancestors aren't cached."""
+        titles, missing = self.cache.ancestry(page.id)
+        if missing is not None and page.parent_kind != "workspace":
+            titles = ["…"]
+        return " / ".join([*titles, page.title])
+
+    def _nearby_locations(self) -> list[Location]:
+        """Where a new page can go, near the highlighted page: inside it, then next to it."""
+        page = self.current
+        if page is None:
+            return []
+        kind = "data_source" if page.kind == "data_source" else "page"
+        locations = [Location(f"Inside: {self._path_of(page)}", kind, page.id)]
+        if page.parent_kind in ("page", "database", "data_source") and page.parent_id:
+            titles, missing = self.cache.ancestry(page.id)
+            where = " / ".join(titles) if missing is None and titles else "its parent"
+            locations.append(Location(f"Next to “{page.title}”: in {where}", page.parent_kind, page.parent_id))
+        return locations
+
     def action_new(self) -> None:
+        def chosen(new: NewPage | None) -> None:
+            if new:
+                self.create_page(new)
+
+        self.push_screen(NewPageScreen(self._nearby_locations(), self._path_of), chosen)
+
+    @work(group="create")
+    async def create_page(self, new: NewPage) -> None:
+        """Create the titled page in its place, then open it in $EDITOR for the body."""
+        loc = new.location
+        try:
+            page = await ntn.create_page(new.title, loc.parent_kind, loc.parent_id)
+        except NtnError as err:
+            self.notify(str(err), title="Could not create the page", severity="error")
+            return
+        self.cache.upsert_pages([page])
+        await self._show_pages([page, *(p for p in self.loaded if p.id != page.id)], keep_id=page.id)
         with self.suspend():
-            code = ntn.run_interactive("pages", "create")
+            code = ntn.run_interactive("pages", "edit", page.id)
         if code != 0:
-            self.notify(f"ntn pages create exited with status {code}", severity="warning")
+            self.notify(f"ntn pages edit exited with status {code}", severity="warning")
+        self.cache.invalidate(page.id)
         self.load_list(self.query_text)
 
     def action_trash(self) -> None:
