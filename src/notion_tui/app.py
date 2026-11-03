@@ -211,7 +211,7 @@ class NotionTUI(App):
                 yield Breadcrumb(id="crumbs")
                 yield Static("", id="dbtabs")
                 yield Static("", id="dbinfo")
-                yield Input(placeholder="filter rows: prop:a,b  prop~text  prop>=2024  -prop:x  words…", id="dbquery", select_on_focus=False)
+                yield Input(placeholder="filter rows: prop:a,b  prop~text  prop>=2024  -prop:x  prop:empty  words…", id="dbquery", select_on_focus=False)
                 yield Static("", id="dberror", markup=False)
                 with PreviewScroll():
                     yield BidiMarkdown("", id="preview")
