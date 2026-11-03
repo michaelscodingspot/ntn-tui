@@ -135,6 +135,15 @@ class PreviewScroll(VerticalScroll, can_focus=True):
 
 
 
+def with_cached_tail(fresh: list[Page], cached: list[Page]) -> list[Page]:
+    """A first batch of recent pages, followed by the cached pages older than all of it."""
+    if not fresh:
+        return fresh
+    ids = {p.id for p in fresh}
+    oldest = min(p.last_edited for p in fresh)
+    return fresh + [p for p in cached if p.id not in ids and p.last_edited < oldest]
+
+
 class NotionTUI(App):
     TITLE = "notion-tui"
     CSS = """
@@ -322,14 +331,16 @@ class NotionTUI(App):
         self.cache.upsert_pages(pages)
         self.next_cursor = next_cursor
         if more:
+            known = {p.id for p in self.loaded}
             await self._append_pages(pages)
+            if next_cursor and all(p.id in known for p in pages):
+                # Every page was already listed from the cache: no new row to scroll onto, so fetch on.
+                self.load_list(query, more=True)
             return
-        if not query and next_cursor and pages:
+        if not query and next_cursor:
             # Keep the cached pages older than this first batch, so the list does not shrink to one batch
             # at startup or on refresh. Later batches skip the ones already listed.
-            fresh = {p.id for p in pages}
-            oldest = min(p.last_edited for p in pages)
-            pages = pages + [p for p in self.cache.recent_pages() if p.id not in fresh and p.last_edited < oldest]
+            pages = with_cached_tail(pages, self.cache.recent_pages())
         await self._show_pages(pages, keep_id=self.current.id if self.current else None)
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
