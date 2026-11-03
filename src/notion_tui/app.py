@@ -202,7 +202,7 @@ class NotionTUI(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
-            yield Input(placeholder="/ search pages…", id="search")
+            yield Input(placeholder="/ search pages1…", id="search")
             yield Static("", id="status")
         with Horizontal(id="body"):
             with Vertical(id="list-pane"):
