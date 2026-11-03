@@ -1,16 +1,30 @@
-"""Modal dialogs: trash confirmation, options, the database sort picker and the link picker."""
+"""Modal dialogs: trash confirmation, options, new page, the database sort picker and the link picker."""
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from rich.text import Text
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Label, ListItem, ListView, RadioButton, RadioSet
+from textual.timer import Timer
+from textual.widgets import (
+    Button,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    RadioButton,
+    RadioSet,
+)
 
 from .database import sort_level_name
 from .links import Link, notion_id
+from .new_page import Location, NewPage
+from .ntn import NtnError
 from .options import DATABASE_ENTRIES, Options
 
 
@@ -94,15 +108,116 @@ class OptionsScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
-# Property types a database can be sorted by.
-_UNSORTABLE_TYPES = {"relation", "rollup", "files", "button"}
-
-
 class PickList(ListView):
     BINDINGS = [
         Binding("j", "cursor_down", "down", show=False),
         Binding("k", "cursor_up", "up", show=False),
     ]
+
+
+LOCATION_SEARCH_DEBOUNCE = 0.4
+
+
+class NewPageScreen(ModalScreen[NewPage | None]):
+    """Ask for a new page's title and where in the tree it goes.
+
+    The location list starts with places near the highlighted page; typing in the
+    location search replaces it with matching pages and databases (`find` asks Notion).
+    """
+
+    AUTO_FOCUS = "#title"
+    BINDINGS = [Binding("escape", "back", "back")]
+    DEFAULT_CSS = """
+    NewPageScreen { align: center middle; }
+    #newpage { width: 80; height: auto; max-height: 90%; padding: 1 2; border: round $accent; background: $surface; }
+    #newpage Input { margin-bottom: 1; }
+    #newpage PickList { height: auto; max-height: 14; background: transparent; }
+    #newpage ListItem { padding: 0 1; }
+    #newpage .empty, #newpage .hint { color: $text-muted; }
+    #newpage .hint { margin-top: 1; }
+    """
+
+    def __init__(self, nearby: list[Location], find: Callable[[str], Awaitable[list[Location]]]) -> None:
+        super().__init__()
+        self.nearby = nearby
+        self.find = find  # search text → parent locations; raises NtnError
+        self.locations: list[Location] = []
+        self._search_timer: Timer | None = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="newpage"):
+            yield Label("Title")
+            yield Input(placeholder="page title", id="title")
+            yield Label("Location")
+            yield Input(placeholder="search for another parent page or database…", id="where")
+            yield PickList()
+            yield Label("", classes="empty")
+            yield Label("tab next field · j/k move · enter create · esc clear search / cancel", classes="hint")
+
+    async def on_mount(self) -> None:
+        self.query_one("#newpage").border_title = "New page"
+        await self._show_locations(self.nearby)
+
+    async def _show_locations(self, locations: list[Location], empty: str = "") -> None:
+        self.locations = locations
+        pick = self.query_one(PickList)
+        await pick.clear()
+        await pick.extend(ListItem(Label(loc.label, markup=False)) for loc in locations)
+        if locations:
+            pick.index = 0
+        empty_label = self.query_one(".empty", Label)
+        empty_label.update(empty)
+        empty_label.display = not locations
+
+    async def on_input_changed(self, event: Input.Changed) -> None:
+        event.stop()  # the app treats input changes as its page search
+        if event.input.id != "where":
+            return
+        if self._search_timer:
+            self._search_timer.stop()
+        self.workers.cancel_group(self, "where")
+        query = event.value.strip()
+        if not query:
+            await self._show_locations(self.nearby)
+            return
+        # Drop the old rows at once, so a stale place can't be picked while the search runs.
+        await self._show_locations([], "searching…")
+        self._search_timer = self.set_timer(LOCATION_SEARCH_DEBOUNCE, lambda: self.search(query))
+
+    @work(exclusive=True, group="where")
+    async def search(self, query: str) -> None:
+        try:
+            locations, empty = await self.find(query), f"Nothing matches “{query}”."
+        except NtnError as err:
+            locations, empty = [], f"Search failed: {err}"
+        if self.query_one("#where", Input).value.strip() == query:  # else typed on meanwhile
+            await self._show_locations(locations, empty)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.query_one(PickList).focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        event.stop()
+        title = self.query_one("#title", Input).value.strip()
+        if not title:
+            self.notify("Give the page a title first.", severity="warning")
+            self.query_one("#title", Input).focus()
+            return
+        self.dismiss(NewPage(title, self.locations[event.list_view.index or 0]))
+
+    def action_back(self) -> None:
+        """Like the main window: esc clears a search first, then closes."""
+        where = self.query_one("#where", Input)
+        if where.value:
+            where.value = ""
+            where.focus()
+        else:
+            self.dismiss(None)
+
+
+# Property types a database can be sorted by.
+_UNSORTABLE_TYPES = {"relation", "rollup", "files", "button"}
 
 
 class PropertyPickScreen(ModalScreen[str | None]):
