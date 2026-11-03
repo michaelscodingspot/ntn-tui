@@ -1,10 +1,13 @@
-"""Open a Notion page in the default browser and bring that browser window to the front.
+"""Open a Notion page or web link in the default browser and bring that browser window to the front.
 
 GNOME on Wayland refuses focus requests from apps that aren't focused already, so a tab
 opened from the terminal lands in a background window. The "Window Calls" GNOME Shell
 extension (window-calls@domandoman.xyz) exposes window listing and activation over D-Bus;
 when it is installed we use it to raise the window showing the page. Without it, the page
 still opens, just without focus.
+
+A Notion page is found by its title. A web link's title isn't known in advance, so the
+browser window whose title changes (the new tab) or that appears after opening is raised.
 """
 
 from __future__ import annotations
@@ -79,4 +82,44 @@ async def raise_page_window(title: str) -> bool:
         if match:
             return await _gdbus("Activate", str(match["id"])) is not None
         await asyncio.sleep(_POLL)
+    return False
+
+
+def _browser_class() -> str:
+    """The default browser's window class, guessed from its desktop file: google-chrome.desktop → google-chrome."""
+    try:
+        out = subprocess.run(
+            ["xdg-settings", "get", "default-web-browser"], capture_output=True, text=True, timeout=2
+        ).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+    return out.strip().removesuffix(".desktop").casefold()
+
+
+def _is_browser(window: dict, browser: str) -> bool:
+    if not browser:
+        return True  # unknown browser: any window may be it
+    names = {(window.get("wm_class") or "").casefold(), (window.get("wm_class_instance") or "").casefold()}
+    return any(name and (name == browser or browser.endswith(name) or name.endswith(browser)) for name in names)
+
+
+async def open_and_raise(url: str) -> bool:
+    """Open a link in the browser and activate the browser window that shows it."""
+    browser = await asyncio.to_thread(_browser_class)
+    before = await _windows()
+    open_url(url)
+    if before is None:
+        return False  # extension not installed: the link opens without focus
+    titles = {w["id"]: w.get("title") for w in before}
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _RAISE_TIMEOUT
+    while loop.time() < deadline:
+        await asyncio.sleep(_POLL)
+        windows = await _windows() or []
+        changed = [
+            w for w in windows
+            if not w.get("focus") and _is_browser(w, browser) and titles.get(w["id"], object()) != w.get("title")
+        ]
+        if changed:
+            return await _gdbus("Activate", str(changed[0]["id"])) is not None
     return False

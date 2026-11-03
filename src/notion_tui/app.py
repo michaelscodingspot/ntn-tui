@@ -855,7 +855,7 @@ class NotionTUI(App):
         """Show a linked Notion page here; open any other link in the browser."""
         page = await self._linked_page(link)
         if page is None:
-            desktop.open_url(link.url)
+            await desktop.open_and_raise(link.url)
             return
         if self.current and self.current.id != page.id:
             self._link_history.append(self.current)

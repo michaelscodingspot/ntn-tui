@@ -62,7 +62,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 
 Links in the preview are coloured and clickable. Following a link (`l`, or a click) shows a
 Notion page or database right here, selected in the list (added at the top when not listed);
-any other link opens in the browser.
+any other link opens in the browser, which is brought to the front.
 
 The database keys act on the database highlighted in the list; focus stays there.
 
