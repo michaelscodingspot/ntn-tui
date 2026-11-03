@@ -11,6 +11,7 @@ browser window whose title changes (the new tab) or that appears after opening i
 
 An image in a page is downloaded to ~/.cache/notion-tui/files and opened locally with the
 user's `x` script (falling back to xdg-open), so it shows in the image viewer, not the browser.
+A file not opened for 7 days is deleted the next time the app starts.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import time
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -36,6 +38,7 @@ _WINDOWS = [
 _RAISE_TIMEOUT = 5.0  # seconds to wait for the browser to show the page
 _POLL = 0.25
 FILES_DIR = Path.home() / ".cache" / "notion-tui" / "files"
+FILES_TTL_DAYS = 7  # downloaded files not opened for this long are deleted at startup
 
 
 def open_url(url: str) -> None:
@@ -148,7 +151,23 @@ def _download(url: str) -> Path:
         partial = path.with_suffix(path.suffix + ".part")
         partial.write_bytes(data)
         partial.replace(path)
+    else:
+        path.touch()  # opened again: restart its time to live
     return path
+
+
+def prune_files() -> int:
+    """Delete downloaded files not opened for FILES_TTL_DAYS days. Returns how many were deleted."""
+    cutoff = time.time() - FILES_TTL_DAYS * 86400
+    deleted = 0
+    for path in FILES_DIR.glob("*") if FILES_DIR.is_dir() else ():
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                deleted += 1
+        except OSError:
+            pass
+    return deleted
 
 
 async def open_file(url: str) -> None:

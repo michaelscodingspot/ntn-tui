@@ -230,6 +230,7 @@ class NotionTUI(App):
         if cached:
             await self._show_pages(cached)
         self.load_list("")
+        self.run_worker(asyncio.to_thread(desktop.prune_files), group="prune")
 
     # ---------- list ----------
 
