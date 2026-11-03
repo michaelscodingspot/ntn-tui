@@ -29,7 +29,7 @@ from .database import (
     view_columns,
     view_label,
 )
-from .links import Link, notion_id, notion_links_to_markdown, page_links
+from .links import Link, notion_id, notion_links_to_markdown, page_links, same_file
 from .modals import ConfirmScreen, LinkPickScreen, OptionsScreen, SortScreen
 from .ntn import NtnError, Page, View
 from .options import Options
@@ -852,7 +852,10 @@ class NotionTUI(App):
 
     @work(exclusive=True, group="link")
     async def follow_link(self, link: Link) -> None:
-        """Show a linked Notion page here; open any other link in the browser."""
+        """Show a linked Notion page here; open an image locally; open any other link in the browser."""
+        if link.image:
+            await self._open_image(link)
+            return
         page = await self._linked_page(link)
         if page is None:
             await desktop.open_and_raise(link.url)
@@ -860,6 +863,35 @@ class NotionTUI(App):
         if self.current and self.current.id != page.id:
             self._link_history.append(self.current)
         await self._go_to(page)
+
+    async def _open_image(self, link: Link) -> None:
+        """Download and open the image. Notion's file links expire after an hour, so when the
+        cached link fails the page is fetched again for a fresh one."""
+        try:
+            await desktop.open_file(link.url)
+            return
+        except OSError:
+            pass
+        page = self.current
+        if page is None or page.kind != "page":
+            self.notify("Could not download the image", severity="error")
+            return
+        self.notify("Image link expired, refreshing the page…")
+        try:
+            markdown = await ntn.get_markdown(page.id)
+        except NtnError as err:
+            self.notify(f"Could not refresh the page: {err}", severity="error")
+            return
+        self.cache.put_content(page, markdown)
+        if self.current and self.current.id == page.id:
+            await self._render_page(page, markdown)
+        fresh = next((l for l in page_links(split_page(markdown, page.title)[1]) if l.image and same_file(l.url, link.url)), None)
+        try:
+            if fresh is None:
+                raise OSError("image no longer in the page")
+            await desktop.open_file(fresh.url)
+        except OSError as err:
+            self.notify(f"Could not download the image: {err}", severity="error")
 
     async def _linked_page(self, link: Link) -> Page | None:
         hex_id = notion_id(link.url)

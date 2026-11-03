@@ -1,4 +1,4 @@
-from notion_tui.links import Link, notion_id, notion_links_to_markdown, page_links
+from notion_tui.links import Link, notion_id, notion_links_to_markdown, page_links, same_file
 
 
 def test_notion_tags_become_markdown_links():
@@ -27,3 +27,17 @@ def test_notion_id():
     assert notion_id("https://www.notion.so/40d2100b-efea-81b9-8df1-ca772785cc9c") == hex_id
     assert notion_id(f"https://example.com/{hex_id}") is None
     assert notion_id("https://www.notion.so/pricing") is None
+
+
+def test_page_images_after_links():
+    md = "![](https://s3.example/a/b/image.png?sig=1)\n\n[A](https://a.com)\n\n![Chart](https://s3.example/c/d/x%20y.jpg)"
+    assert page_links(md) == [
+        Link("A", "https://a.com"),
+        Link("Image 1 · image.png", "https://s3.example/a/b/image.png?sig=1", image=True),
+        Link("Image 2 · Chart", "https://s3.example/c/d/x%20y.jpg", image=True),
+    ]
+
+
+def test_same_file_ignores_signature():
+    assert same_file("https://s3.example/a/image.png?sig=1", "https://s3.example/a/image.png?sig=2")
+    assert not same_file("https://s3.example/a/image.png?sig=1", "https://s3.example/b/image.png?sig=1")

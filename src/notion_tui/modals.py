@@ -241,7 +241,7 @@ class SortScreen(ModalScreen[list | None]):
 
 
 class LinkPickScreen(ModalScreen[Link | None]):
-    """Choose one of the page's links. Returns it."""
+    """Choose one of the page's links or images. Returns it."""
 
     AUTO_FOCUS = "PickList"
     BINDINGS = [Binding("escape,q,l", "cancel", "cancel")]
@@ -259,7 +259,7 @@ class LinkPickScreen(ModalScreen[Link | None]):
 
     def compose(self) -> ComposeResult:
         def item(link: Link) -> ListItem:
-            where = "Notion" if notion_id(link.url) else link.url
+            where = "image" if link.image else "Notion" if notion_id(link.url) else link.url
             text = Text.assemble(link.title, (f"  {where}", "dim"), no_wrap=True, overflow="ellipsis")
             return ListItem(Label(text))
 
@@ -268,7 +268,7 @@ class LinkPickScreen(ModalScreen[Link | None]):
             yield Label("j/k move · enter open · esc cancel", classes="hint")
 
     def on_mount(self) -> None:
-        self.query_one("#links").border_title = "Links"
+        self.query_one("#links").border_title = "Links and images"
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         event.stop()

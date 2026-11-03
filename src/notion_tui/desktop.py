@@ -8,15 +8,25 @@ still opens, just without focus.
 
 A Notion page is found by its title. A web link's title isn't known in advance, so the
 browser window whose title changes (the new tab) or that appears after opening is raised.
+
+An image in a page is downloaded to ~/.cache/notion-tui/files and opened locally with the
+user's `x` script (falling back to xdg-open), so it shows in the image viewer, not the browser.
 """
 
 from __future__ import annotations
 
 import ast
 import asyncio
+import hashlib
 import json
+import shutil
 import subprocess
+import urllib.request
 import webbrowser
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from .links import file_name
 
 _WINDOWS = [
     "gdbus", "call", "--session",
@@ -25,6 +35,7 @@ _WINDOWS = [
 ]
 _RAISE_TIMEOUT = 5.0  # seconds to wait for the browser to show the page
 _POLL = 0.25
+FILES_DIR = Path.home() / ".cache" / "notion-tui" / "files"
 
 
 def open_url(url: str) -> None:
@@ -123,3 +134,33 @@ async def open_and_raise(url: str) -> bool:
         if changed:
             return await _gdbus("Activate", str(changed[0]["id"])) is not None
     return False
+
+
+def _download(url: str) -> Path:
+    """Save the file to the files folder, once per file (the signature in the query is ignored)."""
+    parts = urlsplit(url)
+    key = hashlib.sha1(f"{parts.netloc}{parts.path}".encode()).hexdigest()[:12]
+    path = FILES_DIR / f"{key}-{file_name(url) or 'file'}"
+    if not path.exists():
+        FILES_DIR.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(url, timeout=30) as response:
+            data = response.read()
+        partial = path.with_suffix(path.suffix + ".part")
+        partial.write_bytes(data)
+        partial.replace(path)
+    return path
+
+
+async def open_file(url: str) -> None:
+    """Download the file and open it locally with `x` (or xdg-open). Raises OSError when the
+    download fails, e.g. an expired Notion file link (HTTP 403)."""
+    path = await asyncio.to_thread(_download, url)
+    opener = shutil.which("x") or str(Path.home() / ".local" / "bin" / "x")
+    command = [opener if Path(opener).exists() else "xdg-open", str(path)]
+    subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )

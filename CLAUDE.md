@@ -5,11 +5,11 @@ Terminal UI for Notion (Python 3.13, Textual, run with `uv run notion-tui`): pag
 - `src/notion_tui/app.py` — Textual app: list, preview, search, database view tabs / filter line / paging, key bindings.
 - `src/notion_tui/database.py` — pure database-preview helpers: rows table, view columns and labels, sort labels. Tested in `tests/test_database.py`.
 - `src/notion_tui/modals.py` — modal dialogs: trash confirmation, options, database sort picker, link picker.
-- `src/notion_tui/links.py` — pure link helpers: Notion `<page>`/`<database>` tags → Markdown links, a page's links, Notion ID from a URL. Tested in `tests/test_links.py`.
+- `src/notion_tui/links.py` — pure link helpers: Notion `<page>`/`<database>` tags → Markdown links, a page's links and images, Notion ID from a URL. Tested in `tests/test_links.py`.
 - `src/notion_tui/ntn.py` — async wrapper over the `ntn` CLI; the only path to Notion (search, data-source schema and query, views (read-only), pages get/edit/create/trash).
 - `src/notion_tui/cache.py` — SQLite cache `~/.cache/notion-tui/cache.db` (`pages`, `page_content`, `nodes`; for databases `views`, `data_source_schema`, `db_state`) for instant startup and previews.
 - `src/notion_tui/query.py` — pure parser: database filter line → Notion filter JSON, using the property schema. Tested in `tests/test_query.py` (`uv run pytest`).
 - `src/notion_tui/options.py` — user options in `~/.config/notion-tui/options.json`.
-- `src/notion_tui/desktop.py` — opens a page in the browser, raises the window via GNOME "Window Calls" D-Bus extension.
+- `src/notion_tui/desktop.py` — opens a page in the browser, raises the window via GNOME "Window Calls" D-Bus extension; downloads page images to `~/.cache/notion-tui/files` and opens them with `x`.
 - `src/notion_tui/bidi.py` — preview Markdown: right-aligns right-to-left (Hebrew, Arabic) blocks and keeps Notion's single line breaks. Characters stay in logical order; kitty reorders RTL itself.
 - Notion calls run in background workers; UI never blocks. Tested on Linux (GNOME); no Windows. README.md "How it works" has details.
