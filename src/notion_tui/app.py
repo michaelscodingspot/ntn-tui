@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 
 from rich.text import Text
@@ -16,7 +18,7 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Footer, Input, Label, ListItem, ListView, Markdown, Static
 
-from . import desktop, ntn, query
+from . import desktop, editor, ntn, query
 from .bidi import BidiMarkdown, BidiMixin
 from .cache import MAX_DEPTH, Cache
 from .database import (
@@ -46,6 +48,7 @@ SEARCH_DEBOUNCE = 0.4  # seconds to wait after typing stops before asking Notion
 LOAD_MORE_MARGIN = 5  # fetch the next batch when the cursor is this close to the end
 BODY_CHECKS = 2  # parallel ntn calls when checking which database entries have content
 VIEW_FETCHES = 2  # parallel ntn calls when fetching a database's views
+LEAVE_ALT_SCREEN = "\x1b[?1049l"  # terminal code that switches back to the shell's screen
 
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _PROPERTY = re.compile(r"^'?([^':][^:]*?)'?:\s*(.*)$")
@@ -244,6 +247,7 @@ class NotionTUI(App):
         self.query_text = ""  # active search ("" = recent pages)
         self.next_cursor: str | None = None  # Notion cursor for the next batch of the current list
         self._loading = 0
+        self._editing = False  # an edit is under way: a second `e` would save over it with stale text
         self._spin = 0  # frame of the loading spinner in the status line
         self._spinner: Timer | None = None
         self._rendered_id: str | None = None
@@ -385,16 +389,12 @@ class NotionTUI(App):
     async def load_list(self, query: str, more: bool = False) -> None:
         """Fetch recent pages (empty query) or search results from Notion."""
         cursor = self.next_cursor if more else None
-        self._loading += 1
-        self._update_status()
         try:
-            pages, next_cursor = await ntn.search(query, cursor)
+            with self._busy():
+                pages, next_cursor = await ntn.search(query, cursor)
         except NtnError as err:
             self.notify(str(err), title="ntn search failed", severity="error")
             return
-        finally:
-            self._loading -= 1
-            self._update_status()
         if query != self.query_text:
             return  # the user typed something else meanwhile
         self.cache.upsert_pages(pages)
@@ -875,15 +875,95 @@ class NotionTUI(App):
         if self._is_page(page, "edited"):
             self._edit_in_editor(page)
 
-    def _edit_in_editor(self, page: Page) -> None:
-        """Open the page in $EDITOR (`ntn pages edit`), then reload the list."""
-        with self.suspend():
-            code = ntn.run_interactive("pages", "edit", page.id)
+    @work(group="edit")
+    async def _edit_in_editor(self, page: Page) -> None:
+        """Edit the page body in $EDITOR, then save it and reload the list.
+
+        Notion is read before and written after with the TUI on screen; only the editor runs
+        while it is suspended, so going to the editor and back doesn't flash the shell.
+        """
+        if self._editing:
+            self.notify("Already editing a page", severity="warning")
+            return
+        self._editing = True
+        try:
+            await self._edit_body(page)
+        finally:
+            self._editing = False
+
+    async def _edit_body(self, page: Page) -> None:
+        try:
+            with self._busy():
+                body, truncated = await ntn.get_body(page.id)
+        except NtnError as err:
+            self.notify(str(err), title="Could not load the page", severity="error")
+            return
+        if truncated:  # too long to round-trip safely: let ntn handle it end to end
+            with self.suspend():
+                code = ntn.run_interactive("pages", "edit", page.id)
+            if code != 0:
+                self.notify(f"ntn pages edit exited with status {code}", severity="warning")
+            self._reload_after_edit(page)
+            return
+        original = body + "\n"  # the same text `ntn pages edit` puts in the editor
+        failed: OSError | None = None
+        with self._suspend_on_screen():
+            try:  # an exception here would leave the TUI suspended
+                code, edited = editor.edit_text(original)
+            except OSError as err:
+                failed = err
+        if failed is not None:
+            self.notify(str(failed), title="Could not start the editor", severity="error")
+            return
         if code != 0:
-            self.notify(f"ntn pages edit exited with status {code}", severity="warning")
+            self.notify(f"The editor exited with status {code}; nothing saved", severity="warning")
+            return
+        if edited == original:
+            return
+        if not edited.strip():
+            self.notify("The page is empty in the editor; nothing saved", severity="warning")
+            return
+        try:
+            with self._busy():
+                await ntn.set_body(page.id, edited)
+        except NtnError as err:
+            kept = editor.keep_unsaved(page.id, edited)
+            self.notify(f"{err}\nYour text is in {kept}", title="Could not save the page", severity="error")
+            return
+        self._reload_after_edit(page)
+
+    @contextmanager
+    def _busy(self) -> Iterator[None]:
+        """Show the loading spinner while a Notion call runs."""
+        self._loading += 1
+        self._update_status()
+        try:
+            yield
+        finally:
+            self._loading -= 1
+            self._update_status()
+
+    def _reload_after_edit(self, page: Page) -> None:
         # The list reload brings the new last_edited; the stale cached preview is then refetched.
         self.cache.invalidate(page.id)
         self.load_list(self.query_text)
+
+    @contextmanager
+    def _suspend_on_screen(self) -> Iterator[None]:
+        """`suspend()` that leaves the TUI's last frame on screen instead of switching back to the
+        shell, so the editor opens straight over it."""
+        driver = self._driver
+        if driver is None:
+            yield
+            return
+        write = driver.write
+        driver.write = lambda data: write(data.replace(LEAVE_ALT_SCREEN, ""))
+        try:
+            with self.suspend():
+                del driver.write  # only the leaving writes are filtered
+                yield
+        finally:
+            driver.__dict__.pop("write", None)
 
     def _path_of(self, page: Page) -> str:
         return page_path(page, self.cache.ancestry(page.id))
