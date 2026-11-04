@@ -19,7 +19,7 @@ from textual.widget import Widget
 from textual.widgets import Footer, Input, Label, ListItem, ListView, Markdown, Static
 
 from . import desktop, editor, ntn, query
-from .bidi import BidiMarkdown
+from .bidi import BidiMarkdown, BidiMixin
 from .cache import MAX_DEPTH, Cache
 from .database import (
     SKIPPED_VIEW_TYPES,
@@ -89,6 +89,10 @@ def long_date(iso: str) -> str:
     return dt.strftime("%Y-%m-%d %H:%M") if dt else "unknown"
 
 
+class TitleLabel(BidiMixin, Label):
+    """A page title in the list; RTL words reordered for kitty."""
+
+
 class PageItem(ListItem):
     def __init__(self, page: Page) -> None:
         super().__init__()
@@ -96,13 +100,16 @@ class PageItem(ListItem):
 
     def compose(self) -> ComposeResult:
         marker = "▦ " if self.page.kind == "data_source" else ""
-        yield Label(marker + self.page.title, classes="title", markup=False)
+        yield TitleLabel(marker + self.page.title, classes="title", markup=False)
 
 
-class Breadcrumb(Widget):
+class Breadcrumb(BidiMixin, Widget):
     """One line: "Notes / Quick Notes". When too long, the start is cut and replaced by "…"."""
 
     parts: reactive[tuple[str, ...]] = reactive(())
+
+    def bidi_text(self) -> str:
+        return ""  # the path reads left to right; only words inside an RTL title move
 
     def render(self) -> Text:
         text = Text(no_wrap=True)

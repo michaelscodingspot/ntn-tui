@@ -150,8 +150,10 @@ the hidden ones.
   shell doesn't flash. Unchanged or emptied text is not saved; text Notion refuses is kept in
   `~/.cache/notion-tui/unsaved/<page id>.md`. A page too long for Notion to return whole
   falls back to `ntn pages edit`'s own editor flow.
-- Right-to-left text (Hebrew, Arabic): the terminal (kitty, VTE) puts RTL characters in
-  order; the preview right-aligns paragraphs whose first letter is RTL, as Notion does.
+- Right-to-left text (Hebrew, Arabic): kitty draws the letters of each RTL word in order but
+  leaves the words left to right. So after wrapping, each line of the preview, page list and
+  breadcrumb has its words put in visual order (Unicode bidi algorithm), letters untouched.
+  The preview right-aligns paragraphs whose first letter is RTL, as Notion does.
   Single line breaks are kept, since Notion writes one block per line.
 - SQLite cache at `~/.cache/notion-tui/cache.db` (`pages`, `page_content`, and for databases `views`,
   `data_source_schema`, `db_state`) makes startup
