@@ -297,8 +297,12 @@ async def get_markdown(page_id: str) -> str:
 async def get_body(page_id: str) -> tuple[str, bool]:
     """A page's Markdown body without the properties, as `ntn pages edit` puts it in the editor,
     and whether Notion truncated it."""
-    data = json.loads(await _run("pages", "get", page_id, "--json"))["markdown"]
-    return data.get("markdown", ""), bool(data.get("truncated"))
+    out = await _run("pages", "get", page_id, "--json")
+    try:
+        data = json.loads(out)["markdown"]
+        return data.get("markdown", ""), bool(data.get("truncated"))
+    except (ValueError, KeyError, TypeError, AttributeError) as err:
+        raise NtnError(f"Unexpected `ntn pages get --json` output: {err!r}") from err
 
 
 async def set_body(page_id: str, markdown: str) -> None:

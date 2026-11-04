@@ -247,6 +247,7 @@ class NotionTUI(App):
         self.query_text = ""  # active search ("" = recent pages)
         self.next_cursor: str | None = None  # Notion cursor for the next batch of the current list
         self._loading = 0
+        self._editing = False  # an edit is under way: a second `e` would save over it with stale text
         self._spin = 0  # frame of the loading spinner in the status line
         self._spinner: Timer | None = None
         self._rendered_id: str | None = None
@@ -388,16 +389,12 @@ class NotionTUI(App):
     async def load_list(self, query: str, more: bool = False) -> None:
         """Fetch recent pages (empty query) or search results from Notion."""
         cursor = self.next_cursor if more else None
-        self._loading += 1
-        self._update_status()
         try:
-            pages, next_cursor = await ntn.search(query, cursor)
+            with self._busy():
+                pages, next_cursor = await ntn.search(query, cursor)
         except NtnError as err:
             self.notify(str(err), title="ntn search failed", severity="error")
             return
-        finally:
-            self._loading -= 1
-            self._update_status()
         if query != self.query_text:
             return  # the user typed something else meanwhile
         self.cache.upsert_pages(pages)
@@ -885,16 +882,22 @@ class NotionTUI(App):
         Notion is read before and written after with the TUI on screen; only the editor runs
         while it is suspended, so going to the editor and back doesn't flash the shell.
         """
-        self._loading += 1
-        self._update_status()
+        if self._editing:
+            self.notify("Already editing a page", severity="warning")
+            return
+        self._editing = True
         try:
-            body, truncated = await ntn.get_body(page.id)
+            await self._edit_body(page)
+        finally:
+            self._editing = False
+
+    async def _edit_body(self, page: Page) -> None:
+        try:
+            with self._busy():
+                body, truncated = await ntn.get_body(page.id)
         except NtnError as err:
             self.notify(str(err), title="Could not load the page", severity="error")
             return
-        finally:
-            self._loading -= 1
-            self._update_status()
         if truncated:  # too long to round-trip safely: let ntn handle it end to end
             with self.suspend():
                 code = ntn.run_interactive("pages", "edit", page.id)
@@ -903,8 +906,15 @@ class NotionTUI(App):
             self._reload_after_edit(page)
             return
         original = body + "\n"  # the same text `ntn pages edit` puts in the editor
+        failed: OSError | None = None
         with self._suspend_on_screen():
-            code, edited = editor.edit_text(original)
+            try:  # an exception here would leave the TUI suspended
+                code, edited = editor.edit_text(original)
+            except OSError as err:
+                failed = err
+        if failed is not None:
+            self.notify(str(failed), title="Could not start the editor", severity="error")
+            return
         if code != 0:
             self.notify(f"The editor exited with status {code}; nothing saved", severity="warning")
             return
@@ -913,18 +923,25 @@ class NotionTUI(App):
         if not edited.strip():
             self.notify("The page is empty in the editor; nothing saved", severity="warning")
             return
-        self._loading += 1
-        self._update_status()
         try:
-            await ntn.set_body(page.id, edited)
+            with self._busy():
+                await ntn.set_body(page.id, edited)
         except NtnError as err:
             kept = editor.keep_unsaved(page.id, edited)
             self.notify(f"{err}\nYour text is in {kept}", title="Could not save the page", severity="error")
             return
+        self._reload_after_edit(page)
+
+    @contextmanager
+    def _busy(self) -> Iterator[None]:
+        """Show the loading spinner while a Notion call runs."""
+        self._loading += 1
+        self._update_status()
+        try:
+            yield
         finally:
             self._loading -= 1
             self._update_status()
-        self._reload_after_edit(page)
 
     def _reload_after_edit(self, page: Page) -> None:
         # The list reload brings the new last_edited; the stale cached preview is then refetched.

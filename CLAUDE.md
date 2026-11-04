@@ -1,6 +1,6 @@
 # notion-tui
 
-This project is called **notion-tui**, or **ntn-tui** in short. 
+This project is called **notion-tui**, or **ntn-tui** in short.
 
 It's a terminal UI for Notion (Python 3.13, Textual, run with `uv run notion-tui`): page list left, Markdown preview right, edit in `$EDITOR`.
 
