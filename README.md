@@ -144,8 +144,10 @@ the hidden ones.
   workspace top level),
   `ntn pages get/edit/trash` for page actions.
 - Calls run in the background; the screen never waits on Notion.
-- Right-to-left text (Hebrew, Arabic): the terminal (kitty, VTE) puts RTL characters in
-  order; the preview right-aligns paragraphs whose first letter is RTL, as Notion does.
+- Right-to-left text (Hebrew, Arabic): kitty draws the letters of each RTL word in order but
+  leaves the words left to right. So after wrapping, each line of the preview, page list and
+  breadcrumb has its words put in visual order (Unicode bidi algorithm), letters untouched.
+  The preview right-aligns paragraphs whose first letter is RTL, as Notion does.
   Single line breaks are kept, since Notion writes one block per line.
 - SQLite cache at `~/.cache/notion-tui/cache.db` (`pages`, `page_content`, and for databases `views`,
   `data_source_schema`, `db_state`) makes startup

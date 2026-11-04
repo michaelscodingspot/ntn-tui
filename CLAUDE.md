@@ -12,5 +12,5 @@ Terminal UI for Notion (Python 3.13, Textual, run with `uv run notion-tui`): pag
 - `src/notion_tui/query.py` — pure parser: database filter line → Notion filter JSON, using the property schema. Tested in `tests/test_query.py` (`uv run pytest`).
 - `src/notion_tui/options.py` — user options in `~/.config/notion-tui/options.json`.
 - `src/notion_tui/desktop.py` — opens a page in the browser, raises the window via GNOME "Window Calls" D-Bus extension; downloads page images to `~/.cache/notion-tui/files` and opens them with `x`; files unopened for 7 days are deleted at startup.
-- `src/notion_tui/bidi.py` — preview Markdown: right-aligns right-to-left (Hebrew, Arabic) blocks and keeps Notion's single line breaks. Characters stay in logical order; kitty reorders RTL itself.
+- `src/notion_tui/bidi.py` — right-to-left text (Hebrew, Arabic): kitty draws letters inside an RTL word in order but not the word order, so each rendered line (preview, page list, breadcrumb) gets its words put in visual order while letters stay logical; RTL preview blocks right-aligned; Notion's single line breaks kept. Tested in `tests/test_bidi.py`.
 - Notion calls run in background workers; UI never blocks. Tested on Linux (GNOME); no Windows. README.md "How it works" has details.
