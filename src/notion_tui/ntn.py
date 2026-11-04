@@ -49,16 +49,16 @@ class Node:
     parent_id: str
 
 
-async def _run(*args: str) -> str:
+async def _run(*args: str, stdin: str | None = None) -> str:
     proc = await asyncio.create_subprocess_exec(
         NTN,
         *args,
-        stdin=asyncio.subprocess.DEVNULL,
+        stdin=asyncio.subprocess.DEVNULL if stdin is None else asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        out, err = await proc.communicate()
+        out, err = await proc.communicate(None if stdin is None else stdin.encode())
     except asyncio.CancelledError:
         # A newer request superseded this one: don't leave ntn running.
         try:
@@ -292,6 +292,18 @@ async def has_body(page_id: str, look_at: int = 25) -> bool:
 
 async def get_markdown(page_id: str) -> str:
     return await _run("pages", "get", page_id)
+
+
+async def get_body(page_id: str) -> tuple[str, bool]:
+    """A page's Markdown body without the properties, as `ntn pages edit` puts it in the editor,
+    and whether Notion truncated it."""
+    data = json.loads(await _run("pages", "get", page_id, "--json"))["markdown"]
+    return data.get("markdown", ""), bool(data.get("truncated"))
+
+
+async def set_body(page_id: str, markdown: str) -> None:
+    """Replace a page's body with `markdown` (sent on stdin, so any size fits)."""
+    await _run("pages", "edit", page_id, stdin=markdown)
 
 
 _PARENT_KEYS = {"page": "page_id", "database": "database_id", "data_source": "data_source_id"}

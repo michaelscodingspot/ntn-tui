@@ -42,7 +42,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `esc`          | back to list / clear search              |
 | `tab`          | cycle search → list → preview            |
 | `/`            | search (instant from cache, then Notion) |
-| `e`            | edit page in `$EDITOR` (`ntn pages edit`)|
+| `e`            | edit page in `$VISUAL` / `$EDITOR`       |
 | `n`            | new page: title and place, then `$EDITOR` |
 | `d`            | trash page (asks first)                  |
 | `o`            | open page in Notion web app, focus tab   |
@@ -144,6 +144,12 @@ the hidden ones.
   workspace top level),
   `ntn pages get/edit/trash` for page actions.
 - Calls run in the background; the screen never waits on Notion.
+- Editing (`e`): the page body is read with `ntn pages get --json` and saved with
+  `ntn pages edit` (Markdown on stdin), both while the TUI is on screen. Only the editor runs
+  while the TUI is suspended, and the TUI's last frame stays up until the editor draws, so the
+  shell doesn't flash. Unchanged or emptied text is not saved; text Notion refuses is kept in
+  `~/.cache/notion-tui/unsaved/<page id>.md`. A page too long for Notion to return whole
+  falls back to `ntn pages edit`'s own editor flow.
 - Right-to-left text (Hebrew, Arabic): the terminal (kitty, VTE) puts RTL characters in
   order; the preview right-aligns paragraphs whose first letter is RTL, as Notion does.
   Single line breaks are kept, since Notion writes one block per line.
