@@ -1,6 +1,8 @@
 # notion-tui
 
-Terminal UI for Notion (Python 3.13, Textual, run with `uv run notion-tui`): page list left, Markdown preview right, edit in `$EDITOR`.
+This project is called **notion-tui**, or **ntn-tui** in short. 
+
+It's a terminal UI for Notion (Python 3.13, Textual, run with `uv run notion-tui`): page list left, Markdown preview right, edit in `$EDITOR`.
 
 - `src/notion_tui/app.py` — Textual app: list, preview, search, database view tabs / filter line / paging, key bindings.
 - `src/notion_tui/database.py` — pure database-preview helpers: rows table, view columns and labels, sort labels. Tested in `tests/test_database.py`.
