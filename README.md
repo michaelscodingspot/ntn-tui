@@ -96,8 +96,8 @@ The database keys act on the database highlighted in the list; focus stays there
 `v` switches a database between View (the Markdown table) and Edit (a grid with a cell
 cursor); the top right of the preview shows which. Edit mode works on list and table views.
 Other views stay in View mode, and a database last used in Edit mode comes back to it.
-Highlighting such a database in the list shows the grid without taking the focus: `enter`
-or `tab` goes in.
+Highlighting such a database in the list shows the grid while `j` / `k` stay on the list:
+`→`, `l`, `v` or `enter` goes into the grid (`enter` full screen).
 
 | Key                 | In the grid                                         |
 |---------------------|-----------------------------------------------------|

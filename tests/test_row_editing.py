@@ -10,7 +10,8 @@ from notion_tui import ntn
 from notion_tui.app import NotionTUI, PageList, PreviewScroll
 from notion_tui.cache import Cache
 from notion_tui.grid import RowGrid
-from notion_tui.modals import CellPickScreen, CellTextScreen
+from notion_tui.links import Link
+from notion_tui.modals import CellPickScreen, CellTextScreen, LinkPickScreen
 from notion_tui.ntn import NtnError, Page, View
 from notion_tui.options import Options
 
@@ -133,6 +134,32 @@ def test_last_mode_opens_without_taking_focus_from_the_list(tmp_path, notion):
         assert str(app.query_one("#dbmode").render()) == "EDIT"
 
     drive(tmp_path, script)
+
+
+@pytest.mark.parametrize("key", ["right", "l", "v"])
+def test_keys_from_the_list_go_into_a_showing_grid(tmp_path, notion, key):
+    async def script(app, pilot, grid):
+        assert app.query_one(PageList).has_focus
+        await go(app, pilot, key)
+        assert grid.has_focus and grid.display and app.cache.db_edit_mode("ds")
+        await go(app, pilot, "down")
+        assert grid.current_row_id == "b"
+        await go(app, pilot, "right", "l")
+        assert grid.cursor_column == 2
+        await go(app, pilot, "k", "left", "h")
+        assert grid.current_row_id == "a" and grid.cursor_column == 0
+
+    drive(tmp_path, script)
+
+
+def test_l_still_opens_links_without_a_grid(tmp_path, notion):
+    async def script(app, pilot, grid):
+        app.links = [Link("https://example.com", "Example")]
+        app.refresh_bindings()
+        await go(app, pilot, "l")
+        assert isinstance(app.screen, LinkPickScreen)
+
+    drive(tmp_path, script, edit=False)
 
 
 def test_v_switches_modes_and_remembers(tmp_path, notion):

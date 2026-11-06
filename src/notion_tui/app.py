@@ -139,6 +139,8 @@ class PageList(ListView):
         Binding("k", "cursor_up", "up", show=False),
         Binding("g", "first", "top", show=False),
         Binding("G", "last", "bottom", show=False),
+        # Only while a grid is showing; otherwise `l` falls through to the app's links key.
+        Binding("right,l", "app.focus_grid", "go to grid", key_display="→"),
     ]
 
     def action_first(self) -> None:
@@ -763,13 +765,22 @@ class NotionTUI(App):
         grid.display, preview.display = editing, not editing
         if switched and focused:
             (grid if editing else self._after_grid()).focus()
+        if switched:
+            self.refresh_bindings()  # the list's key into the grid comes and goes with it
 
     def _after_grid(self) -> Widget:
         """What takes the focus when the grid goes away."""
         return self.query_one(PreviewScroll if self.screen.has_class("full") else PageList)
 
+    def action_focus_grid(self) -> None:
+        self.query_one(RowGrid).focus()
+
     def action_db_edit_mode(self) -> None:
         if not self._is_db():
+            return
+        grid = self.query_one(RowGrid)
+        if grid.display and not grid.has_focus:  # a grid in plain sight: `v` means "let me at it"
+            grid.focus()
             return
         req = self._db_request(self.current.id)
         if req.schema is None:
@@ -1010,6 +1021,8 @@ class NotionTUI(App):
             if action == "db_more":
                 rows = self._current_rows()
                 return bool(rows and rows.cursor)
+        if action == "focus_grid":
+            return self._is_db() and self.query_one(RowGrid).display
         if action == "links":
             return bool(self.links)
         if action == "link_back":
