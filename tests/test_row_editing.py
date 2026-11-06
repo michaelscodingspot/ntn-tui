@@ -4,7 +4,7 @@ import asyncio
 import copy
 
 import pytest
-from textual.widgets import Input
+from textual.widgets import Input, Markdown
 
 from notion_tui import ntn
 from notion_tui.app import NotionTUI, PageList, PreviewScroll
@@ -43,6 +43,7 @@ class FakeNotion:
         self.rows = [row("a", "Alpha"), row("b", "Beta")]
         self.trashed = {}
         self.calls = []
+        self.queries = 0
         self.fail = False
         for name in ("search", "get_schema", "list_view_ids", "query_rows", "update_row", "create_row", "trash", "restore"):
             monkeypatch.setattr(ntn, name, getattr(self, name))
@@ -57,6 +58,7 @@ class FakeNotion:
         raise NtnError("views come from the cache here")
 
     async def query_rows(self, data_source_id, filter=None, sorts=None, start_cursor=None, page_size=100):
+        self.queries += 1
         return copy.deepcopy(self.rows), None
 
     def _check(self):
@@ -411,5 +413,63 @@ def test_filter_from_the_grid_returns_to_the_grid(tmp_path, notion):
         await go(app, pilot, "v", "f")  # split view, where closing the line would otherwise focus the list
         await go(app, pilot, "escape")
         assert grid.has_focus
+
+    drive(tmp_path, script, edit=False)
+
+
+def preview(app):
+    return app.query_one("#preview", Markdown).source
+
+
+def info(app):
+    return str(app.query_one("#dbinfo").render())
+
+
+def test_t_switches_the_layout_without_asking_notion_or_saving(tmp_path, notion):
+    async def script(app, pilot, grid):
+        assert preview(app).startswith("- **Alpha**")  # a list view opens as a list
+        assert "layout" not in info(app)
+        queries = notion.queries
+        await go(app, pilot, "t")
+        assert preview(app).startswith("| Name |")
+        assert "layout: table (custom)" in info(app)
+        assert notion.queries == queries
+        assert app.cache.db_state("ds") == (None, "", None)
+        await go(app, pilot, "t")
+        assert preview(app).startswith("- **Alpha**")
+        assert "layout" not in info(app)
+
+    drive(tmp_path, script, edit=False)
+
+
+def test_a_picked_layout_stays_with_its_view_until_the_app_quits(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "t")
+        await go(app, pilot, "right_square_bracket")
+        await go(app, pilot, "left_square_bracket")
+        assert preview(app).startswith("| Name |")
+        await go(app, pilot, "r")
+        assert preview(app).startswith("| Name |")
+
+    drive(tmp_path, script, edit=False)
+
+
+def test_t_does_nothing_in_edit_mode(tmp_path, notion):
+    async def script(app, pilot, grid):
+        assert grid.display
+        before = preview(app)
+        await go(app, pilot, "v", "t")
+        assert grid.has_focus and preview(app) == before
+        assert not app._layouts
+
+    drive(tmp_path, script)
+
+
+def test_t_does_nothing_on_a_board_view(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "right_square_bracket")
+        before = preview(app)
+        await go(app, pilot, "t")
+        assert preview(app) == before and not app._layouts
 
     drive(tmp_path, script, edit=False)

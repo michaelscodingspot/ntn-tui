@@ -12,20 +12,23 @@ from .ntn import View
 _UNRENDERED_TYPES = {"created_by", "last_edited_by", "relation", "rollup", "files", "button"}
 # System columns that only add width to a database preview.
 _HIDDEN_COLUMN_TYPES = _UNRENDERED_TYPES | {"created_time", "last_edited_time", "unique_id"}
-# View types with no rows to show. Other non-table views (board, calendar, …) are shown as a table.
+# View types with no rows to show. Views without a layout of their own (board, calendar, …) are shown as a table.
 SKIPPED_VIEW_TYPES = {"form", "chart", "dashboard"}
 # View types whose rows can be edited in the grid. Other views stay read-only.
 EDITABLE_VIEW_TYPES = {"table", "list"}
+# How View mode can lay out a view's rows; a view of one of these types opens in its own.
+LAYOUTS = ("table", "list")
 
 
-def rows_markdown(rows: list[dict], has_more: bool, columns: list[str] | None = None) -> str:
-    """A database's rows as a Markdown table.
+def rows_markdown(rows: list[dict], has_more: bool, columns: list[str] | None = None, layout: str = "table") -> str:
+    """A database's rows as a Markdown table, or a bullet list with `layout` "list".
 
     Without `columns`: the title column first, then non-empty columns. With `columns` (a view's
     visible columns, in its order): those columns, minus ones that can't be shown as text.
     """
     if not rows:
         return "_(no rows)_"
+    types = {name: prop.get("type") for name, prop in rows[0].get("properties", {}).items()}
     if columns is None:
         columns = []
         for row in rows:
@@ -35,7 +38,6 @@ def rows_markdown(rows: list[dict], has_more: bool, columns: list[str] | None = 
         columns.sort(key=lambda name: rows[0]["properties"].get(name, {}).get("type") != "title")
         drop_empty = True
     else:
-        types = {name: prop.get("type") for row in rows[:1] for name, prop in row.get("properties", {}).items()}
         columns = [c for c in columns if c in types and types[c] not in _UNRENDERED_TYPES]
         drop_empty = False
     if not columns:
@@ -43,14 +45,25 @@ def rows_markdown(rows: list[dict], has_more: bool, columns: list[str] | None = 
     cells = [[ntn.value_text(row["properties"][c]) if c in row["properties"] else "" for c in columns] for row in rows]
     keep = [i for i, c in enumerate(columns) if i == 0 or not drop_empty or any(r[i] for r in cells)]
 
-    def line(values: list[str]) -> str:
-        return "| " + " | ".join(v.replace("|", "\\|").replace("\n", " ") for v in values) + " |"
-
-    out = [line([columns[i].strip() for i in keep]), "|" + "---|" * len(keep)]
-    out += [line([r[i] for i in keep]) for r in cells]
+    if layout == "list":
+        title = next((i for i in keep if types.get(columns[i]) == "title"), keep[0])
+        out = [_list_item(r[title], [r[i] for i in keep if i != title]) for r in cells]
+    else:
+        out = [_table_line([columns[i].strip() for i in keep]), "|" + "---|" * len(keep)]
+        out += [_table_line([r[i] for i in keep]) for r in cells]
     if has_more:
         out.append(f"\n_{len(rows)} rows shown. Press m for more._")
     return "\n".join(out)
+
+
+def _table_line(values: list[str]) -> str:
+    return "| " + " | ".join(v.replace("|", "\\|").replace("\n", " ") for v in values) + " |"
+
+
+def _list_item(title: str, values: list[str]) -> str:
+    """One row of the list layout: the title, then its non-empty values, as Notion's list shows them."""
+    parts = [f"**{title or 'Untitled'}**", *(v for v in values if v)]
+    return "- " + " · ".join(p.replace("\n", " ") for p in parts)
 
 
 def view_columns(view: View | None, schema: list[dict] | None) -> list[str] | None:
@@ -68,6 +81,15 @@ def view_columns(view: View | None, schema: list[dict] | None) -> list[str] | No
 def can_edit_rows(view: View | None) -> bool:
     """Whether a view's rows can be edited in the grid; a database with no views shows a plain table."""
     return view is None or view.type in EDITABLE_VIEW_TYPES
+
+
+def can_switch_layout(view: View | None) -> bool:
+    """Whether a view's rows can change layout; a database with no views shows a plain table."""
+    return view is not None and view.type in LAYOUTS
+
+
+def next_layout(layout: str) -> str:
+    return LAYOUTS[(LAYOUTS.index(layout) + 1) % len(LAYOUTS)]
 
 
 def grid_columns(schema: list[dict], columns: list[str] | None) -> list[str]:
@@ -121,6 +143,7 @@ class DbRequest:
     filter: dict | None = None
     sorts: list | None = None
     columns: list[str] | None = None
+    layout: str = "table"
     error: str = ""  # the saved query line no longer parses
 
 

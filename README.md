@@ -55,6 +55,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `F`            | database: clear filter and sort          |
 | `m`            | database: load 100 more rows             |
 | `v`            | database: switch View / Edit mode        |
+| `t`            | database, View mode: list / table layout |
 | `,`            | options                                  |
 | `ctrl+alt+w`   | narrow width: middle 70% of the window   |
 | `?`            | help panel                               |
@@ -88,6 +89,9 @@ The database keys act on the database highlighted in the list; focus stays there
 - A view shows its rows with the view's filter (and quick filters), sorts and visible
   columns. Board, calendar, gallery, timeline and map views are shown as a table, with
   the type next to the name. Form, chart and dashboard views are skipped.
+- List views show as a bullet list: the title, then the row's values. `t` switches a list or
+  table view between the two layouts, in View mode only. The switch lasts until the app
+  quits and is not saved; the line above the rows shows `layout: … (custom)` meanwhile.
 - Views, filter and sort changes stay in this app; only [Edit mode](#edit-mode) writes to Notion.
 - The current view, filter line, sort and mode are remembered per database.
 
