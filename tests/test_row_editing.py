@@ -169,7 +169,7 @@ def test_v_switches_modes_and_remembers(tmp_path, notion):
         assert grid.display and grid.has_focus and app.cache.db_edit_mode("ds")
         await go(app, pilot, "v")
         assert not grid.display and not app.cache.db_edit_mode("ds")
-        assert app.query_one(PageList).has_focus
+        assert app.query_one(PreviewScroll).has_focus
 
     drive(tmp_path, script, edit=False)
 
@@ -182,6 +182,64 @@ def test_esc_leaves_edit_mode(tmp_path, notion):
         assert not grid.display and app.query_one(PreviewScroll).has_focus
 
     drive(tmp_path, script)
+
+
+def test_v_keeps_the_focus_on_the_right_side(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "v")
+        assert grid.display and grid.has_focus
+        for _ in range(2):
+            await go(app, pilot, "v")
+            assert not grid.display and app.query_one(PreviewScroll).has_focus
+            await go(app, pilot, "v")
+            assert grid.display and grid.has_focus
+
+    drive(tmp_path, script)
+
+
+def test_esc_goes_back_to_the_list_in_split_layout(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "v")
+        await go(app, pilot, "escape")
+        assert not grid.display and app.query_one(PageList).has_focus
+
+    drive(tmp_path, script)
+
+
+def test_a_view_notion_refuses_heals_from_fresh_views(tmp_path, notion, monkeypatch):
+    bad = {"property": "s"}
+    good = View("v1", "Shelf", "list", None, None, None)
+    asked = []
+
+    async def query_rows(data_source_id, filter=None, sorts=None, start_cursor=None, page_size=100):
+        asked.append(filter)
+        if filter == bad:
+            raise NtnError("body failed validation")
+        return copy.deepcopy(notion.rows), None
+
+    async def list_view_ids(data_source_id):
+        return ["v1"]
+
+    async def get_view(view_id):
+        return good
+
+    monkeypatch.setattr(ntn, "query_rows", query_rows)
+    monkeypatch.setattr(ntn, "list_view_ids", list_view_ids)
+    monkeypatch.setattr(ntn, "get_view", get_view)
+
+    async def run():
+        cache = Cache(tmp_path / "c.db")
+        cache.put_schema("ds", SCHEMA)
+        cache.put_views("ds", [View("v1", "Shelf", "list", bad, None, None)])
+        cache.upsert_pages([DB])
+        app = NotionTUI(cache, Options())
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(app, pilot)
+            await settle(app, pilot)
+            assert asked[0] == bad and asked[-1] is None
+            assert app.db_rows and len(app.db_rows.rows) == 2
+
+    asyncio.run(run())
 
 
 def test_board_view_stays_in_view_mode(tmp_path, notion):

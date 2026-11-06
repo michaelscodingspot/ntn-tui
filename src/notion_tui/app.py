@@ -568,6 +568,8 @@ class NotionTUI(App):
                     await self._render_page(page, f"_Could not load rows: {err}_")
                     if self._editing_rows():  # the grid has no place for the message
                         self.notify(str(err), title="Could not load rows", severity="error")
+                    if page.id not in self._meta_fresh:  # the cached view may be what Notion refused
+                        self.refresh_db_meta(page)
                 else:
                     await self._render_message(f"Could not load page: {err}")
             return
@@ -764,7 +766,7 @@ class NotionTUI(App):
         switched, focused = editing != grid.display, grid.has_focus or preview.has_focus
         grid.display, preview.display = editing, not editing
         if switched and focused:
-            (grid if editing else self._after_grid()).focus()
+            (grid if editing else preview).focus()  # the focus stays on this side
         if switched:
             self.refresh_bindings()  # the list's key into the grid comes and goes with it
 
@@ -1158,6 +1160,7 @@ class NotionTUI(App):
             return
         if self.query_one(RowGrid).has_focus:
             self._set_edit_mode(False)
+            self._after_grid().focus()
             return
         search = self.query_one("#search", Input)
         if search.has_focus and search.value:

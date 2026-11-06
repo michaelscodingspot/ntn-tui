@@ -188,7 +188,8 @@ async def get_view(view_id: str) -> View:
     obj = json.loads(await _run("api", f"v1/views/{view_id}", "-X", "GET"))
     config = obj.get("configuration") or {}
     # Quick filters (the filter pills under a view's tabs) narrow the view too: AND them in.
-    quick = [{"property": prop_id, **condition} for prop_id, condition in (obj.get("quick_filters") or {}).items()]
+    # A pill with no value chosen comes as {}: it filters nothing, and Notion refuses it in a query.
+    quick = [{"property": prop_id, **condition} for prop_id, condition in (obj.get("quick_filters") or {}).items() if condition]
     try:
         view_filter = combine(obj.get("filter") or None, quick)
     except QueryError:
