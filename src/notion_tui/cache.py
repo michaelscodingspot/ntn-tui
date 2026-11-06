@@ -64,12 +64,13 @@ CREATE TABLE IF NOT EXISTS data_source_schema (
     fetched_at      REAL NOT NULL
 );
 
--- What each database shows now: its view, query line and sort override.
+-- What each database shows now: its view, query line, sort override and View / Edit mode.
 CREATE TABLE IF NOT EXISTS db_state (
     data_source_id TEXT PRIMARY KEY,
     view_id        TEXT,           -- NULL = first view
     query_text     TEXT NOT NULL DEFAULT '',
     sorts_json     TEXT            -- NULL = the view's sorts
+    -- edit_mode   INTEGER: 1 = rows open in the Edit grid (added by migration)
 );
 """
 
@@ -91,6 +92,8 @@ class Cache:
                 self.db.execute("ALTER TABLE pages ADD COLUMN kind TEXT NOT NULL DEFAULT 'page'")
             if "has_body" not in columns:  # caches made before the database entries option
                 self.db.execute("ALTER TABLE pages ADD COLUMN has_body INTEGER")
+            if not any(row[1] == "edit_mode" for row in self.db.execute("PRAGMA table_info(db_state)")):
+                self.db.execute("ALTER TABLE db_state ADD COLUMN edit_mode INTEGER NOT NULL DEFAULT 0")
 
     def recent_pages(self, limit: int = 200) -> list[Page]:
         rows = self.db.execute(
@@ -239,8 +242,23 @@ class Cache:
     def put_db_state(self, data_source_id: str, view_id: str | None, query_text: str, sorts: list | None) -> None:
         with self.db:
             self.db.execute(
-                "INSERT OR REPLACE INTO db_state (data_source_id, view_id, query_text, sorts_json) VALUES (?, ?, ?, ?)",
+                "INSERT INTO db_state (data_source_id, view_id, query_text, sorts_json) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(data_source_id) DO UPDATE SET view_id=excluded.view_id, "
+                "query_text=excluded.query_text, sorts_json=excluded.sorts_json",
                 (data_source_id, view_id, query_text, _dump(sorts)),
+            )
+
+    def db_edit_mode(self, data_source_id: str) -> bool:
+        """Whether the database was last used in Edit mode."""
+        row = self.db.execute("SELECT edit_mode FROM db_state WHERE data_source_id = ?", (data_source_id,)).fetchone()
+        return bool(row and row[0])
+
+    def put_db_edit_mode(self, data_source_id: str, on: bool) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO db_state (data_source_id, edit_mode) VALUES (?, ?) "
+                "ON CONFLICT(data_source_id) DO UPDATE SET edit_mode=excluded.edit_mode",
+                (data_source_id, int(on)),
             )
 
 

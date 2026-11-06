@@ -1,4 +1,5 @@
-"""Modal dialogs: trash confirmation, options, new page, the database sort picker and the link picker."""
+"""Modal dialogs: trash confirmation, options, new page, the database sort picker, the link picker,
+and the editors that open over a cell of the database grid."""
 
 from __future__ import annotations
 
@@ -9,17 +10,21 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.geometry import Region
 from textual.screen import ModalScreen
 from textual.timer import Timer
 from textual.widgets import (
     Button,
     Checkbox,
+    Footer,
     Input,
     Label,
     ListItem,
     ListView,
+    OptionList,
     RadioButton,
     RadioSet,
+    SelectionList,
 )
 
 from . import narrow
@@ -28,6 +33,7 @@ from .links import Link, notion_id
 from .new_page import Location, NewPage
 from .ntn import NtnError
 from .options import DATABASE_ENTRIES, Options
+from .rows import check_option
 
 
 class ConfirmScreen(ModalScreen[bool]):
@@ -408,3 +414,168 @@ class LinkPickScreen(ModalScreen[Link | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class CellTextScreen(ModalScreen):
+    """A one-line editor over a grid cell. Dismisses with what `parse` makes of the text, or None
+    on esc or when nothing changed. `parse` raises ValueError to keep the editor open with a message."""
+
+    BINDINGS = [
+        Binding("enter", "save", "save"),  # the input takes the key; listed so the footer shows it
+        Binding("escape", "cancel", "cancel"),
+    ]
+    DEFAULT_CSS = """
+    CellTextScreen { background: transparent; }
+    #cell-input { height: 1; border: none; padding: 0 1; background: $boost; }
+    #cell-input:focus { border: none; background: $boost; }
+    """
+    MIN_WIDTH = 30
+
+    def __init__(self, value: str, cell: Region, parse: Callable[[str], object]) -> None:
+        super().__init__()
+        self.value = value
+        self.cell = cell
+        self.parse = parse
+
+    def compose(self) -> ComposeResult:
+        yield Input(self.value, select_on_focus=False, id="cell-input")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        box = self.query_one(Input)
+        width = max(self.cell.width, self.MIN_WIDTH)
+        box.styles.width = width
+        box.styles.offset = (max(min(self.cell.x, self.size.width - width), 0), self.cell.y)
+        box.cursor_position = len(self.value)
+
+    def action_save(self) -> None:
+        self.query_one(Input).action_submit()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        if event.value == self.value:
+            self.dismiss(None)
+            return
+        try:
+            self.dismiss(self.parse(event.value))
+        except ValueError as err:
+            self.notify(str(err), severity="warning")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class _PickList(OptionList):
+    BINDINGS = [
+        Binding("j", "cursor_down", "down", show=False),
+        Binding("k", "cursor_up", "up", show=False),
+        Binding("enter", "select", "choose"),
+    ]
+
+
+class _TickList(SelectionList):
+    BINDINGS = [
+        Binding("j", "cursor_down", "down", show=False),
+        Binding("k", "cursor_up", "up", show=False),
+        Binding("space", "select", "tick"),
+        Binding("enter", "screen.done", "done"),
+    ]
+
+
+_EMPTY = "(empty)"
+
+
+class CellPickScreen(ModalScreen[list[str] | None]):
+    """A pick list under a grid cell: one choice, or several with `multi`. Dismisses with the chosen
+    names ([] = cleared), or None on esc. With `can_add`, `a` adds a new option by name."""
+
+    BINDINGS = [
+        Binding("a", "add", "new option"),
+        Binding("escape", "cancel", "cancel"),
+    ]
+    DEFAULT_CSS = """
+    CellPickScreen { background: transparent; }
+    CellPickScreen #picker { width: auto; min-width: 24; max-width: 50; height: auto; max-height: 14; border: round $accent; background: $surface; }
+    #pick-list, #pick-list:focus { width: auto; min-width: 22; height: auto; max-height: 12; border: none; background: transparent; }
+    #new-option, #new-option:focus { height: 1; border: none; padding: 0 1; background: $boost; }
+    #new-option { display: none; }
+    """
+
+    def __init__(self, options: list[str], chosen: list[str], cell: Region, multi: bool, can_add: bool) -> None:
+        super().__init__()
+        self.options = options + [name for name in chosen if name not in options]
+        self.chosen = chosen
+        self.cell = cell
+        self.multi = multi
+        self.can_add = can_add
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="picker"):
+            if self.multi:
+                yield _TickList(*[(name, name, name in self.chosen) for name in self.options], id="pick-list")
+            else:
+                yield _PickList(*self.options, _EMPTY, id="pick-list")
+            yield Input(placeholder="new option", id="new-option")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        if not self.multi and self.chosen:
+            self.query_one(_PickList).highlighted = self.options.index(self.chosen[0])
+        rows = min(len(self.options) + (0 if self.multi else 1), 12) + 3  # the list, its border, the footer
+        below = self.cell.bottom
+        y = below if below + rows <= self.size.height else max(self.cell.y - rows + 1, 0)
+        self.query_one("#picker").styles.offset = (max(min(self.cell.x, self.size.width - 50), 0), y)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "add":
+            return self.can_add and not self.query_one("#new-option").display
+        return True
+
+    def action_add(self) -> None:
+        box = self.query_one("#new-option", Input)
+        box.display = True
+        box.focus()
+        self.refresh_bindings()
+
+    def _close_new_option(self) -> None:
+        box = self.query_one("#new-option", Input)
+        box.value = ""
+        box.display = False
+        self.query_one(_TickList if self.multi else _PickList).focus()
+        self.refresh_bindings()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        try:
+            name = check_option(event.value)
+        except ValueError as err:
+            self.notify(str(err), severity="warning")
+            return
+        if not name:
+            self._close_new_option()
+        elif self.multi:
+            ticks = self.query_one(_TickList)
+            if name not in self.options:
+                self.options.append(name)
+                ticks.add_option((name, name, True))
+            else:
+                ticks.select(name)
+            self._close_new_option()
+        else:
+            self.dismiss([name])
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if not self.multi:
+            event.stop()
+            name = str(event.option.prompt)
+            self.dismiss([] if name == _EMPTY else [name])
+
+    def action_done(self) -> None:
+        picked = self.query_one(_TickList).selected
+        self.dismiss([name for name in self.options if name in picked])
+
+    def action_cancel(self) -> None:
+        if self.query_one("#new-option").display:
+            self._close_new_option()
+        else:
+            self.dismiss(None)

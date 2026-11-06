@@ -337,6 +337,39 @@ async def trash(page_id: str) -> None:
     await _run("pages", "trash", page_id, "--yes")
 
 
+def _object(out: str) -> dict:
+    try:
+        return json.loads(out)
+    except ValueError as err:
+        raise NtnError(f"Unexpected `ntn api` output: {err!r}") from err
+
+
+async def create_row(data_source_id: str, title: str) -> dict:
+    """Add a row with a title to a database; returns the row as a query returns it."""
+    body = new_page_body(title, "data_source", data_source_id)
+    return _object(await _run("api", "v1/pages", "-d", json.dumps(body)))
+
+
+async def update_row(row_id: str, properties: dict) -> dict:
+    """Change a row's properties ({name: value}); returns the whole row as Notion now has it."""
+    body = json.dumps({"properties": properties})
+    return _object(await _run("api", f"v1/pages/{row_id}", "-X", "PATCH", "-d", body))
+
+
+async def restore(page_id: str) -> None:
+    """Bring a page or row back from the trash."""
+    await _run("api", f"v1/pages/{page_id}", "-X", "PATCH", "-d", json.dumps({"in_trash": False}))
+
+
+def row_title(row: dict) -> str:
+    return _title(row)
+
+
+def row_page(row: dict) -> Page:
+    """A database row as a Page, for what works on pages (editing its body)."""
+    return _page(row)
+
+
 def run_interactive(*args: str) -> int:
     """Run ntn attached to the real terminal (it opens $EDITOR). Call while the TUI is suspended."""
     return subprocess.call([NTN, *args])

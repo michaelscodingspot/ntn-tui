@@ -14,6 +14,8 @@ _UNRENDERED_TYPES = {"created_by", "last_edited_by", "relation", "rollup", "file
 _HIDDEN_COLUMN_TYPES = _UNRENDERED_TYPES | {"created_time", "last_edited_time", "unique_id"}
 # View types with no rows to show. Other non-table views (board, calendar, …) are shown as a table.
 SKIPPED_VIEW_TYPES = {"form", "chart", "dashboard"}
+# View types whose rows can be edited in the grid. Other views stay read-only.
+EDITABLE_VIEW_TYPES = {"table", "list"}
 
 
 def rows_markdown(rows: list[dict], has_more: bool, columns: list[str] | None = None) -> str:
@@ -61,6 +63,31 @@ def view_columns(view: View | None, schema: list[dict] | None) -> list[str] | No
     if title and title not in names:
         names.insert(0, title)  # list and board views keep the title out of their column list
     return names
+
+
+def can_edit_rows(view: View | None) -> bool:
+    """Whether a view's rows can be edited in the grid; a database with no views shows a plain table."""
+    return view is None or view.type in EDITABLE_VIEW_TYPES
+
+
+def grid_columns(schema: list[dict], columns: list[str] | None) -> list[str]:
+    """The grid's columns: a view's columns, or every property the plain table can show, even when empty."""
+    types = {p["name"]: p["type"] for p in schema}
+    if columns is None:
+        return [p["name"] for p in schema if p["type"] not in _HIDDEN_COLUMN_TYPES]
+    return [c for c in columns if c in types and types[c] not in _UNRENDERED_TYPES]
+
+
+def find_row(rows: list[dict], row_id: str | None) -> dict | None:
+    return next((row for row in rows if row["id"] == row_id), None)
+
+
+def replace_row(rows: list[dict], fresh: dict) -> None:
+    """Swap in the row as Notion returned it after a change."""
+    for i, row in enumerate(rows):
+        if row["id"] == fresh["id"]:
+            rows[i] = fresh
+            return
 
 
 def sort_level_name(level: dict, schema: list[dict] | None) -> str:
