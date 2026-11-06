@@ -18,7 +18,7 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Footer, Input, Label, ListItem, ListView, Markdown, Static
 
-from . import desktop, editor, ntn, query
+from . import desktop, editor, narrow, ntn, query
 from .bidi import BidiMarkdown, BidiMixin
 from .cache import MAX_DEPTH, Cache
 from .database import (
@@ -226,6 +226,8 @@ class NotionTUI(App):
         Binding("backspace", "link_back", "back to linking page"),
         Binding("r", "refresh", "refresh"),
         Binding("comma", "options", "options"),
+        # kitty takes this key in the `nui` window; listed here so `?` shows it. See narrow.py.
+        Binding("ctrl+alt+w", "narrow", "narrow width (70%)", show=False, key_display="ctrl+alt+w"),
         Binding("left_square_bracket", "db_view(-1)", "prev view"),
         Binding("right_square_bracket", "db_view(1)", "next view"),
         Binding("f", "db_filter", "filter"),
@@ -1028,6 +1030,10 @@ class NotionTUI(App):
             self.call_later(self._options_changed)
 
         self.push_screen(OptionsScreen(self.options), closed)
+
+    def action_narrow(self) -> None:
+        if not (narrow.available() and narrow.set_on(not narrow.is_on())):
+            self.notify("Narrow width works only in the window `nui` opens", severity="warning")
 
     async def _options_changed(self) -> None:
         await self._render_list(keep_id=self.current.id if self.current else None)

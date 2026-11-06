@@ -13,6 +13,7 @@ from textual.screen import ModalScreen
 from textual.timer import Timer
 from textual.widgets import (
     Button,
+    Checkbox,
     Input,
     Label,
     ListItem,
@@ -21,6 +22,7 @@ from textual.widgets import (
     RadioSet,
 )
 
+from . import narrow
 from .database import sort_level_name
 from .links import Link, notion_id
 from .new_page import Location, NewPage
@@ -67,6 +69,9 @@ _ENTRY_LABELS = {
 }
 
 
+_NARROW_LABEL = "Narrow width: 70% on a screen-wide window (Ctrl+Alt+W)"
+
+
 class OptionsScreen(ModalScreen[None]):
     """Options dialog. Each change is saved at once; the list is refreshed on close."""
 
@@ -77,6 +82,7 @@ class OptionsScreen(ModalScreen[None]):
     #options { width: 72; height: auto; padding: 1 2; border: round $accent; background: $surface; }
     #options Label { width: 100%; }
     #options RadioSet { width: 100%; margin: 1 0; }
+    #options Checkbox { width: 100%; margin-bottom: 1; }
     #options .hint { color: $text-muted; }
     """
 
@@ -90,7 +96,12 @@ class OptionsScreen(ModalScreen[None]):
             with RadioSet(id="database_entries"):
                 for value in DATABASE_ENTRIES:
                     yield RadioButton(_ENTRY_LABELS[value], value=value == self.options.database_entries, name=value)
-            yield Label("↑/↓ move · enter choose · esc close", classes="hint")
+            yield Label("[b]Window[/b]")
+            available = narrow.available()
+            yield Checkbox(_NARROW_LABEL, value=narrow.is_on(), disabled=not available, id="narrow")
+            if not available:
+                yield Label("Only in the window `nui` opens", classes="hint", markup=False)
+            yield Label("↑/↓ move · tab next · enter choose · esc close", classes="hint")
 
     def on_mount(self) -> None:
         self.query_one("#options").border_title = "Options"
@@ -103,6 +114,12 @@ class OptionsScreen(ModalScreen[None]):
         if event.radio_set.id == "database_entries" and event.pressed.name:
             self.options.database_entries = event.pressed.name
             self.options.save()
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if not narrow.set_on(event.value):
+            with self.prevent(Checkbox.Changed):
+                event.checkbox.value = not event.value
+            self.notify("Could not reach the kitty window", severity="warning")
 
     def action_close(self) -> None:
         self.dismiss(None)

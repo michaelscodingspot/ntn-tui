@@ -55,6 +55,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `F`            | database: clear filter and sort          |
 | `m`            | database: load 100 more rows             |
 | `,`            | options                                  |
+| `ctrl+alt+w`   | narrow width: middle 70% of the window   |
 | `?`            | help panel                               |
 | `q`            | quit                                     |
 
@@ -133,6 +134,12 @@ Saved in `~/.config/notion-tui/options.json` (changed with `,`).
 Database entries are pages that are rows of a database. `show-non-empty` lists only
 entries whose page has content (a block that isn't an empty line); the status line counts
 the hidden ones.
+
+**Narrow width** (`ctrl+alt+w`, or the checkbox under `,`) keeps the app in the middle 70% of
+the window, but only while the window spans the screen: tiled to half the screen it uses the
+full width. It works only in the kitty window the `nui` launcher opens. kitty sets the margins
+through `narrow-window-watcher.py` in my-automations, which saves the setting in
+`~/.local/state/notion-tui/narrow`, not in `options.json`.
 
 ## How it works
 
