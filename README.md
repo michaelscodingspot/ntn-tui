@@ -3,9 +3,9 @@
 Terminal UI for Notion, built on the [`ntn`](https://developers.notion.com) CLI.
 Layout: page list on the left, Markdown preview on the right. The preview's top line
 shows the page's path, e.g. `Notes / Quick Notes`.
-Databases are listed too (marked `▦`); their preview is a table of rows, shown through the
+Databases are listed too (marked `▦`); their preview shows the rows as a table or list, through the
 database's saved views, with a filter line and a sort picker (see [Databases](#databases)).
-Edit and trash work on pages only.
+Database rows can be edited in the app (see [Edit mode](#edit-mode)). Edit and trash work on pages only.
 
 ![Page list with Markdown preview](docs/screenshots/main.png)
 
@@ -54,6 +54,8 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `s`            | database: sort picker                    |
 | `F`            | database: clear filter and sort          |
 | `m`            | database: load 100 more rows             |
+| `v`            | database: switch View / Edit mode        |
+| `t`            | database, View mode: list / table layout |
 | `,`            | options                                  |
 | `ctrl+alt+w`   | narrow width: middle 70% of the window   |
 | `?`            | help panel                               |
@@ -87,8 +89,49 @@ The database keys act on the database highlighted in the list; focus stays there
 - A view shows its rows with the view's filter (and quick filters), sorts and visible
   columns. Board, calendar, gallery, timeline and map views are shown as a table, with
   the type next to the name. Form, chart and dashboard views are skipped.
-- Nothing is written back to Notion: views, filter and sort changes stay in this app.
-- The current view, filter line and sort are remembered per database.
+- List views show as a bullet list: the title, then the row's values. `t` switches a list or
+  table view between the two layouts, in View mode only. The switch lasts until the app
+  quits and is not saved; the line above the rows shows `layout: … (custom)` meanwhile.
+- Views, filter and sort changes stay in this app; only [Edit mode](#edit-mode) writes to Notion.
+- The current view, filter line, sort and mode are remembered per database.
+
+### Edit mode
+
+`v` switches a database between View (the Markdown table or list) and Edit (a grid with a cell
+cursor); the top right of the preview shows which. Edit mode works on list and table views.
+Other views stay in View mode, and a database last used in Edit mode comes back to it.
+Highlighting such a database in the list shows the grid while `j` / `k` stay on the list:
+`→`, `l`, `v` or `enter` goes into the grid (`enter` full screen).
+
+| Key                 | In the grid                                         |
+|---------------------|-----------------------------------------------------|
+| `j` `k` `h` `l`, arrows | move between cells                              |
+| `g` / `G`           | first / last row                                    |
+| `enter`             | edit the cell (`space` too)                         |
+| `n`                 | new row: type its title                             |
+| `x`                 | delete the row, to Notion's trash, without asking   |
+| `u`                 | bring back the last deleted row (several in a row work) |
+| `e`                 | edit the row's body in `$EDITOR`                    |
+| `v`                 | back to View mode, focus stays on the right side    |
+| `esc`               | back to View mode and to the page list              |
+
+Each change is saved to Notion at once: `…` in the row's gutter while saving, `✓` when done.
+If Notion refuses, the old value comes back with a message. A row changed so it no longer
+fits the filter or sort stays where it is until `r`; new rows go at the bottom until then.
+
+| Property                               | Editor                                     |
+|----------------------------------------|--------------------------------------------|
+| Title, text, URL, email, phone         | one-line input over the cell               |
+| Number                                 | input, refuses anything but a number       |
+| Date                                   | input: `2026-11-20`, `2026-11-20 → 2026-11-25` (`->` works) |
+| Select, status                         | pick list; `a` adds a new option (select only) |
+| Multi-select                           | pick list, `space` ticks, `enter` done, `a` adds an option |
+| People                                 | pick list of the people seen in the rows   |
+| Checkbox                               | `enter` or `space` flips it                |
+| Formula, created, last edited, ID      | read-only                                  |
+
+Saving a text cell replaces its formatting (bold, links) and line breaks with the plain text
+typed; a cell left unchanged isn't saved.
 
 ### Filter line (`f`)
 

@@ -18,21 +18,30 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Footer, Input, Label, ListItem, ListView, Markdown, Static
 
-from . import desktop, editor, narrow, ntn, query
+from . import desktop, editor, narrow, ntn, query, rows as row_edit
 from .bidi import BidiMarkdown, BidiMixin
 from .cache import MAX_DEPTH, Cache
 from .database import (
     SKIPPED_VIEW_TYPES,
     DbRequest,
     DbRows,
+    can_edit_rows,
+    can_switch_layout,
+    find_row,
+    grid_columns,
+    next_layout,
     people_names,
+    replace_row,
     rows_markdown,
     sort_label,
     view_columns,
     view_label,
 )
+from .grid import NEW_ROW, RowGrid
 from .links import Link, notion_id, notion_links_to_markdown, page_links, same_file
 from .modals import (
+    CellPickScreen,
+    CellTextScreen,
     ConfirmScreen,
     LinkPickScreen,
     NewPageScreen,
@@ -48,6 +57,7 @@ SEARCH_DEBOUNCE = 0.4  # seconds to wait after typing stops before asking Notion
 LOAD_MORE_MARGIN = 5  # fetch the next batch when the cursor is this close to the end
 BODY_CHECKS = 2  # parallel ntn calls when checking which database entries have content
 VIEW_FETCHES = 2  # parallel ntn calls when fetching a database's views
+SAVED_MARK_SECONDS = 1.5  # how long a grid row shows ✓ after a save
 LEAVE_ALT_SCREEN = "\x1b[?1049l"  # terminal code that switches back to the shell's screen
 
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
@@ -131,6 +141,8 @@ class PageList(ListView):
         Binding("k", "cursor_up", "up", show=False),
         Binding("g", "first", "top", show=False),
         Binding("G", "last", "bottom", show=False),
+        # Only while a grid is showing; otherwise `l` falls through to the app's links key.
+        Binding("right,l", "app.focus_grid", "go to grid", key_display="→"),
     ]
 
     def action_first(self) -> None:
@@ -201,7 +213,11 @@ class NotionTUI(App):
     #list-pane:focus-within { border: round $accent; border-title-color: $accent; }
     #preview-pane { width: 1fr; border: round $border-blurred; border-subtitle-color: $text-muted; }
     #preview-pane:focus-within { border: round $accent; }
-    #crumbs { height: 1; padding: 0 1; margin-bottom: 1; color: $text; }
+    #crumbline { height: 1; margin-bottom: 1; }
+    #crumbs { width: 1fr; height: 1; padding: 0 1; color: $text; }
+    #dbmode { width: auto; height: 1; padding: 0 1; margin-right: 1; display: none; background: $boost; color: $text-muted; text-style: bold; }
+    #dbmode.edit { background: $accent; color: $background; }
+    #grid { height: 1fr; margin: 0 1; display: none; background: transparent; }
     PreviewScroll { padding: 0 1; }
     Screen.full #list-pane { display: none; }
     PageList { background: transparent; scrollbar-size-vertical: 1; }
@@ -218,6 +234,8 @@ class NotionTUI(App):
 
     BINDINGS = [
         Binding("slash", "focus_search", "search"),
+        Binding("v", "db_edit_mode", "view/edit rows"),
+        Binding("t", "db_layout", "list/table"),
         Binding("e", "edit", "edit"),
         Binding("n", "new", "new"),
         Binding("x", "trash", "delete"),
@@ -256,6 +274,10 @@ class NotionTUI(App):
         self._preview_timer: Timer | None = None
         self._search_timer: Timer | None = None
         self.db_rows: DbRows | None = None  # rows of the database being previewed
+        self._row_writes = asyncio.Lock()  # row changes reach Notion one at a time, in the order made
+        self._trashed: dict[str, list[tuple[dict, int]]] = {}  # data source → rows deleted here and where they were
+        self._query_from_grid = False  # the filter line was opened from the grid: go back there
+        self._layouts: dict[str, str] = {}  # view → layout picked with `t`; not saved, gone at quit
         self._meta_fresh: set[str] = set()  # data sources whose views and schema were fetched this session
         self.links: list[Link] = []  # links in the page shown in the preview
         self._link_history: list[Page] = []  # pages left by following a link, newest last
@@ -273,13 +295,16 @@ class NotionTUI(App):
             with Vertical(id="list-pane"):
                 yield PageList(id="pages")
             with Vertical(id="preview-pane"):
-                yield Breadcrumb(id="crumbs")
+                with Horizontal(id="crumbline"):
+                    yield Breadcrumb(id="crumbs")
+                    yield Static("", id="dbmode")
                 yield Static("", id="dbtabs")
                 yield Static("", id="dbinfo")
                 yield Input(placeholder="filter rows: prop:a,b  prop~text  prop>=2024  -prop:x  prop:empty  words…", id="dbquery", select_on_focus=False)
                 yield Static("", id="dberror", markup=False)
                 with PreviewScroll():
                     yield BidiMarkdown("", id="preview", open_links=False)
+                yield RowGrid(id="grid")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -434,7 +459,7 @@ class NotionTUI(App):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         self.screen.add_class("full")
-        self.query_one(PreviewScroll).focus()
+        self.query_one(RowGrid if self._editing_rows() else PreviewScroll).focus()
 
     # ---------- search ----------
 
@@ -532,7 +557,8 @@ class NotionTUI(App):
             await self._render_page(page, cached[0])
             self._prefetch_next()
             return
-        await self._render_page(page, cached[0] if cached else None, note="refreshing…")
+        # The cached preview is in the view's own layout: not worth a flash under a layout picked with `t`.
+        await self._render_page(page, cached[0] if cached and not self._custom_layout(page) else None, note="refreshing…")
         self.fetch_preview(page)
 
     @work(exclusive=True, group="preview")
@@ -545,10 +571,14 @@ class NotionTUI(App):
                     # Keep the toolbar, so a bad view filter or sort can be changed.
                     self.db_rows = DbRows(page.id)
                     await self._render_page(page, f"_Could not load rows: {err}_")
+                    if self._editing_rows():  # the grid has no place for the message
+                        self.notify(str(err), title="Could not load rows", severity="error")
+                    if page.id not in self._meta_fresh:  # the cached view may be what Notion refused
+                        self.refresh_db_meta(page)
                 else:
                     await self._render_message(f"Could not load page: {err}")
             return
-        self.cache.put_content(page, markdown)
+        self._cache_preview(page, markdown)
         if self.current and self.current.id == page.id:
             await self._render_page(page, markdown)
             self.refresh_bindings()
@@ -578,6 +608,9 @@ class NotionTUI(App):
                 req.error = f"query not applied: {err}"
         req.sorts = sorts_override if sorts_override is not None else (view.sorts if view else None)
         req.columns = view_columns(view, schema)
+        if can_switch_layout(view):
+            req.layout = self._layouts.get(view.id, view.type)
+            req.custom_layout = req.layout != view.type
         return req
 
     def _query_filter(self, data_source_id: str, text: str, schema: list[dict], view: View | None) -> dict | None:
@@ -626,7 +659,7 @@ class NotionTUI(App):
         return changed
 
     async def _fetch_db(self, page: Page) -> str:
-        """Query the database's rows for its current view and query line; return the table."""
+        """Query the database's rows for its current view and query line; return its preview."""
         if self.cache.schema(page.id) is None:  # first time: views and schema decide what to ask for
             await self._fetch_meta(page.id)
         req = self._db_request(page.id)
@@ -639,7 +672,19 @@ class NotionTUI(App):
                 rows, cursor = await ntn.query_rows(page.id, req.filter, req.sorts)
         if self.current and self.current.id == page.id:
             self.db_rows = DbRows(page.id, rows, cursor, req.columns, req.filter, req.sorts)
-        return rows_markdown(rows, cursor is not None, req.columns)
+        return self._rows_preview(page.id, rows, cursor is not None, req.columns)
+
+    def _rows_preview(self, data_source_id: str, rows: list[dict], has_more: bool, columns: list[str] | None) -> str:
+        """The rows as Markdown, in the layout the view has now: `t` may have changed it during a fetch."""
+        return rows_markdown(rows, has_more, columns, self._db_request(data_source_id).layout)
+
+    def _custom_layout(self, page: Page) -> bool:
+        return page.kind == "data_source" and self._db_request(page.id).custom_layout
+
+    def _cache_preview(self, page: Page, markdown: str) -> None:
+        """Keep the preview for instant display, unless it shows a layout picked with `t`: those aren't saved."""
+        if not self._custom_layout(page):
+            self.cache.put_content(page, markdown)
 
     @work(exclusive=True, group="dbmeta")
     async def refresh_db_meta(self, page: Page) -> None:
@@ -666,6 +711,7 @@ class NotionTUI(App):
             return
         if rows := self._current_rows():
             rows.cursor = None
+            rows.reloading = True
         self.query_one("#preview-pane").border_subtitle = "refreshing…"
         self._render_db_bar(loading=True)
         self.fetch_preview(page)
@@ -675,8 +721,9 @@ class NotionTUI(App):
         tabs, info = self.query_one("#dbtabs", Static), self.query_one("#dbinfo", Static)
         page = self.current
         if not self._is_db():
-            for widget in (tabs, info, self.query_one("#dbquery"), self.query_one("#dberror")):
+            for widget in (tabs, info, self.query_one("#dbmode"), self.query_one("#dbquery"), self.query_one("#dberror")):
                 widget.display = False
+            self._sync_grid()
             return
         req = self._db_request(page.id)
         tabs.display = info.display = True
@@ -700,14 +747,292 @@ class NotionTUI(App):
             parts.append(f"sort: {sort_label(req.sorts, req.schema) or 'none'} (custom)")
         else:
             parts.append(f"sort: {sort_label(req.sorts, req.schema)}" if req.sorts else "unsorted")
+        editing = self._editing_rows()
+        if req.custom_layout and not editing:
+            parts.append(f"layout: {req.layout} (custom)")
         rows = self._current_rows()
         if rows is None or loading:
             parts.append("loading…")
         else:
             parts.append(f"{len(rows.rows)}{'+' if rows.cursor else ''} row{'' if len(rows.rows) == 1 and not rows.cursor else 's'}")
+        if editing and rows is not None and not loading and not rows.rows:
+            parts.append("press n to add a row")
         info.update(Text(" · ".join(parts), no_wrap=True, overflow="ellipsis"))
+        mode = self.query_one("#dbmode", Static)
+        mode.update("EDIT" if editing else "VIEW")
+        mode.set_class(editing, "edit")
+        mode.display = True
         if not self.query_one("#dbquery").display:
             self._show_db_error(req.error)
+        self._sync_grid()
+
+    # ---------- database rows: Edit mode ----------
+
+    def _editing_rows(self) -> bool:
+        """The grid is what shows for the current database: Edit mode, on a view that allows it."""
+        if not self._is_db() or not self.cache.db_edit_mode(self.current.id):
+            return False
+        req = self._db_request(self.current.id)
+        return req.schema is not None and can_edit_rows(req.view)
+
+    def _sync_grid(self) -> None:
+        """Show the grid or the Markdown preview, whichever the current database calls for."""
+        grid, preview = self.query_one(RowGrid), self.query_one(PreviewScroll)
+        editing = self._editing_rows()
+        if editing:
+            req = self._db_request(self.current.id)
+            loaded = self._current_rows()
+            rows = loaded.rows if loaded else grid.source or []
+            names = grid_columns(req.schema, req.columns)
+            if grid.stale(rows, names):
+                grid.show(rows, names)
+        switched, focused = editing != grid.display, grid.has_focus or preview.has_focus
+        grid.display, preview.display = editing, not editing
+        if switched and focused:
+            (grid if editing else preview).focus()  # the focus stays on this side
+        if switched:
+            self.refresh_bindings()  # the list's key into the grid comes and goes with it
+
+    def _after_grid(self) -> Widget:
+        """What takes the focus when the grid goes away."""
+        return self.query_one(PreviewScroll if self.screen.has_class("full") else PageList)
+
+    def action_focus_grid(self) -> None:
+        self.query_one(RowGrid).focus()
+
+    def action_db_edit_mode(self) -> None:
+        if not self._is_db():
+            return
+        grid = self.query_one(RowGrid)
+        if grid.display and not grid.has_focus:  # a grid in plain sight: `v` means "let me at it"
+            grid.focus()
+            return
+        req = self._db_request(self.current.id)
+        if req.schema is None:
+            self.notify("The database's properties aren't loaded yet.", severity="warning")
+        elif not can_edit_rows(req.view):
+            self.notify(f"Edit mode works on list and table views. This one is a {req.view.type}.", severity="warning")
+        else:
+            self._set_edit_mode(not self._editing_rows())
+
+    def _set_edit_mode(self, on: bool) -> None:
+        self.cache.put_db_edit_mode(self.current.id, on)
+        self._render_db_bar()
+        if on:
+            self.query_one(RowGrid).focus()
+
+    def _cursor_row(self) -> tuple[DbRows, dict] | None:
+        """The loaded rows and the row under the grid's cursor."""
+        rows = self._current_rows()
+        row = find_row(rows.rows, self.query_one(RowGrid).current_row_id) if rows else None
+        return (rows, row) if row else None
+
+    def on_data_table_cell_selected(self, event: RowGrid.CellSelected) -> None:
+        found, name = self._cursor_row(), self.query_one(RowGrid).current_name
+        if not found or name is None or name not in found[1]["properties"]:
+            return
+        row = found[1]
+        prop = row["properties"][name]
+        kind = prop.get("type", "")
+        match row_edit.editor(kind):
+            case "check":
+                self._save_cell(row["id"], name, *row_edit.toggled(prop))
+            case "text":
+                self._edit_text_cell(row["id"], name, kind, prop)
+            case "pick" | "multi" as how:
+                self._edit_pick_cell(row["id"], name, kind, prop, how == "multi")
+            case _:
+                self.notify(f"Notion sets {name.strip()}; it can't be changed here.", severity="warning")
+
+    def _edit_text_cell(self, row_id: str, name: str, kind: str, prop: dict) -> None:
+        def done(change: tuple[dict, str] | None) -> None:
+            if change:
+                self._save_cell(row_id, name, *change)
+
+        screen = CellTextScreen(row_edit.edit_text(prop), self.query_one(RowGrid).cell_region(), lambda text: row_edit.parse_text(kind, text))
+        self.push_screen(screen, done)
+
+    def _edit_pick_cell(self, row_id: str, name: str, kind: str, prop: dict, multi: bool) -> None:
+        page = self.current
+        people = self._people.get(page.id, {})
+        schema = self.cache.schema(page.id) or []
+        options = sorted(people) if kind == "people" else next((p["options"] for p in schema if p["name"] == name), [])
+        chosen = row_edit.picked(prop)
+
+        def done(names: list[str] | None) -> None:
+            if names is None or names == chosen:
+                return
+            self._remember_options(page.id, name, names)
+            self._save_cell(row_id, name, *row_edit.pick_value(kind, names, people))
+
+        cell = self.query_one(RowGrid).cell_region()
+        self.push_screen(CellPickScreen(options, chosen, cell, multi, row_edit.can_add_options(kind)), done)
+
+    def _remember_options(self, data_source_id: str, name: str, names: list[str]) -> None:
+        """Keep options added here in the cached schema, so the pick list and the filter line know them."""
+        schema = self.cache.schema(data_source_id) or []
+        prop = next((p for p in schema if p["name"] == name), None)
+        new = [n for n in names if prop and prop["type"] != "people" and n not in prop["options"]]
+        if new:
+            prop["options"] += new
+            self.cache.put_schema(data_source_id, schema)
+
+    def _save_cell(self, row_id: str, name: str, value: dict, shown: str) -> None:
+        grid = self.query_one(RowGrid)
+        grid.set_cell(row_id, name, shown)
+        grid.mark(row_id, "…")
+        self._write_cell(self.current, row_id, name, value)
+
+    @work(group="row-write")
+    async def _write_cell(self, page: Page, row_id: str, name: str, value: dict) -> None:
+        grid = self.query_one(RowGrid)
+        rows = self._rows_of(page)
+        try:
+            async with self._row_writes:
+                with self._busy():
+                    fresh = await ntn.update_row(row_id, {name: value})
+        except NtnError as err:
+            self.notify(str(err), title=f"Could not save {name.strip()}", severity="error")
+            old = find_row(rows.rows, row_id) if rows else None
+            if old and self._rows_of(page) is rows:
+                grid.redraw_row(old)
+                grid.mark(row_id, " ")
+            return
+        rows = self._rows_of(page)
+        if rows is None:
+            self.cache.invalidate(page.id)  # moved on: the cached table is out of date
+            return
+        replace_row(rows.rows, fresh)
+        grid.redraw_row(fresh)
+        grid.mark(row_id, "✓")
+        self.set_timer(SAVED_MARK_SECONDS, lambda: grid.mark(row_id, " "))
+        await self._store_rows(page, rows)
+
+    def _rows_of(self, page: Page) -> DbRows | None:
+        rows = self._current_rows()
+        return rows if rows and rows.page_id == page.id else None
+
+    async def _store_rows(self, page: Page, rows: DbRows) -> None:
+        """After rows or their layout changed: refresh the Markdown preview View mode shows, and the cached copy."""
+        markdown = self._rows_preview(page.id, rows.rows, rows.cursor is not None, rows.columns)
+        self._cache_preview(page, markdown)
+        await self._render_page(page, markdown)
+
+    def action_row_new(self) -> None:
+        grid, page = self.query_one(RowGrid), self.current
+        schema = self.cache.schema(page.id) or []
+        title = next((p["name"] for p in schema if p["type"] == "title"), None)
+        if title not in grid.names or self._current_rows() is None:
+            self.notify("The rows aren't loaded yet.", severity="warning")
+        elif grid.has_row(NEW_ROW):
+            self.notify("Still adding the last row.", severity="warning")
+        else:
+            grid.add_new_row(title)
+            self.call_after_refresh(self._ask_new_title, page, title)
+
+    def _ask_new_title(self, page: Page, title: str) -> None:
+        grid = self.query_one(RowGrid)
+
+        def done(text: str | None) -> None:
+            if text:
+                grid.set_cell(NEW_ROW, title, text)
+                grid.mark(NEW_ROW, "…")
+                self._create_row(page, text)
+            else:
+                grid.drop_row(NEW_ROW)
+
+        self.push_screen(CellTextScreen("", grid.cell_region(), str.strip), done)
+
+    @work(group="row-write")
+    async def _create_row(self, page: Page, title: str) -> None:
+        grid = self.query_one(RowGrid)
+        try:
+            async with self._row_writes:
+                with self._busy():
+                    row = await ntn.create_row(page.id, title)
+        except NtnError as err:
+            grid.drop_row(NEW_ROW)
+            self.notify(str(err), title="Could not add the row", severity="error")
+            return
+        rows = self._rows_of(page)
+        if rows is None:
+            self.cache.invalidate(page.id)
+            return
+        grid.drop_row(NEW_ROW)
+        rows.rows.append(row)
+        self._learn_people(page.id, [row])
+        await self._store_rows(page, rows)
+        grid.select_row(row["id"])
+
+    async def action_row_trash(self) -> None:
+        found = self._cursor_row()
+        if not found:
+            return
+        rows, row = found
+        page, index = self.current, rows.rows.index(row)
+        entry = (row, index)
+        rows.rows.remove(row)
+        self.query_one(RowGrid).drop_row(row["id"])
+        self._trashed.setdefault(page.id, []).append(entry)
+        self._trash_row(page, row, entry)
+        self.notify(f"Trashed “{ntn.row_title(row)}”. Press u to bring it back.")
+        await self._store_rows(page, rows)
+
+    @work(group="row-write")
+    async def _trash_row(self, page: Page, row: dict, entry: tuple[dict, int]) -> None:
+        try:
+            async with self._row_writes:
+                with self._busy():
+                    await ntn.trash(row["id"])
+        except NtnError as err:
+            self.notify(str(err), title="Could not delete the row", severity="error")
+            stack = self._trashed.get(page.id, [])
+            if entry in stack:
+                stack.remove(entry)
+                await self._put_row_back(page, row, entry[1])
+            return
+        if any(p.id == row["id"] for p in self.loaded):  # the page list shows entries too
+            await self._show_pages([p for p in self.loaded if p.id != row["id"]], keep_id=self.current.id if self.current else None)
+        self.cache.forget(row["id"])
+
+    async def _put_row_back(self, page: Page, row: dict, index: int) -> None:
+        rows = self._rows_of(page)
+        if rows is None:
+            self.cache.invalidate(page.id)
+            return
+        rows.rows.insert(min(index, len(rows.rows)), row)
+        await self._store_rows(page, rows)
+        self.query_one(RowGrid).select_row(row["id"])
+
+    async def action_row_restore(self) -> None:
+        page = self.current
+        stack = self._trashed.get(page.id)
+        if not stack:
+            self.notify("Nothing to bring back.", severity="warning")
+            return
+        row, index = stack.pop()
+        await self._put_row_back(page, row, index)
+        self._restore_row(page, row)
+
+    @work(group="row-write")
+    async def _restore_row(self, page: Page, row: dict) -> None:
+        try:
+            async with self._row_writes:
+                with self._busy():
+                    await ntn.restore(row["id"])
+        except NtnError as err:
+            self.notify(str(err), title="Could not bring the row back", severity="error")
+            rows = self._rows_of(page)
+            if rows and row in rows.rows:
+                rows.rows.remove(row)
+                await self._store_rows(page, rows)
+            return
+        self.notify(f"Restored “{ntn.row_title(row)}”.")
+
+    def action_row_body(self) -> None:
+        found = self._cursor_row()
+        if found:
+            self._edit_in_editor(ntn.row_page(found[1]))
 
     def _show_db_error(self, message: str) -> None:
         error = self.query_one("#dberror", Static)
@@ -721,6 +1046,10 @@ class NotionTUI(App):
             if action == "db_more":
                 rows = self._current_rows()
                 return bool(rows and rows.cursor)
+            if action == "db_layout":
+                return can_switch_layout(self._db_request(self.current.id).view) and not self._editing_rows()
+        if action == "focus_grid":
+            return self._is_db() and self.query_one(RowGrid).display
         if action == "links":
             return bool(self.links)
         if action == "link_back":
@@ -738,10 +1067,21 @@ class NotionTUI(App):
         self._save_db_state(self.current.id, view_id=req.views[(index + step) % len(req.views)].id)
         self._reload_db()
 
+    async def action_db_layout(self) -> None:
+        """Lay out the current view's rows the other way, from the rows already loaded."""
+        req = self._db_request(self.current.id)
+        self._layouts[req.view.id] = next_layout(req.layout)
+        rows = self._current_rows()
+        if rows and rows.rows and not rows.reloading:
+            await self._store_rows(self.current, rows)
+        else:  # no rows yet, a load error to keep on screen, or a reload that will draw in the new layout
+            self._render_db_bar(loading=bool(rows and rows.reloading))
+
     def action_db_filter(self) -> None:
         if not self._is_db():
             return
         box = self.query_one("#dbquery", Input)
+        self._query_from_grid = self.query_one(RowGrid).has_focus
         box.value = self.cache.db_state(self.current.id)[1]
         box.cursor_position = len(box.value)  # refine the current filter: type on at the end
         box.display = True
@@ -751,7 +1091,8 @@ class NotionTUI(App):
         box = self.query_one("#dbquery", Input)
         box.display = False
         self._show_db_error("")
-        self.query_one(PreviewScroll if self.screen.has_class("full") else PageList).focus()
+        grid = self.query_one(RowGrid)
+        (grid if self._query_from_grid and grid.display else self._after_grid()).focus()
 
     def _apply_db_query(self, text: str) -> None:
         page = self.current
@@ -818,9 +1159,7 @@ class NotionTUI(App):
         self._learn_people(page.id, more)
         rows.rows += more
         rows.cursor = cursor
-        markdown = rows_markdown(rows.rows, cursor is not None, rows.columns)
-        self.cache.put_content(page, markdown)
-        await self._render_page(page, markdown)
+        await self._store_rows(page, rows)
         self.refresh_bindings()
 
     def _prefetch_next(self) -> None:
@@ -837,7 +1176,7 @@ class NotionTUI(App):
         if page.kind == "data_source" and self.cache.schema(page.id) is None:
             return  # a first look at a database costs a call per view: leave it to the real fetch
         try:
-            self.cache.put_content(page, await self._fetch_content(page))
+            self._cache_preview(page, await self._fetch_content(page))
             await self._complete_path(page)
         except NtnError:
             pass  # best effort; the real fetch will report errors
@@ -851,6 +1190,10 @@ class NotionTUI(App):
     def action_back(self) -> None:
         if self.query_one("#dbquery", Input).has_focus:
             self._close_db_query()  # cancel: the query line keeps its applied value
+            return
+        if self.query_one(RowGrid).has_focus:
+            self._set_edit_mode(False)
+            self._after_grid().focus()
             return
         search = self.query_one("#search", Input)
         if search.has_focus and search.value:
