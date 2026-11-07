@@ -1,4 +1,4 @@
-from notion_tui.database import rows_markdown, sort_label, trash_question, view_columns
+from notion_tui.database import can_switch_layout, next_layout, rows_markdown, sort_label, trash_question, view_columns
 from notion_tui.ntn import View
 
 SCHEMA = [
@@ -36,6 +36,20 @@ def test_rows_markdown_with_view_columns_keeps_empty_drops_unrendered():
     assert lines[0] == "| Name | Priority |"
     assert lines[2] == "| a |  |"
     assert "Press m for more" in md
+
+
+def test_rows_markdown_list_layout_puts_title_first_and_skips_empty_values():
+    md = rows_markdown([_row("a", "High"), _row("", None)], True, ["Priority ", "Name"], layout="list")
+    assert md.splitlines()[:2] == ["- **a** · High", "- **Untitled**"]
+    assert "Press m for more" in md
+
+
+def test_layouts_switch_only_on_list_and_table_views():
+    assert can_switch_layout(View("v", "All", "table", None, None, None))
+    assert can_switch_layout(View("v", "All", "list", None, None, None))
+    assert not can_switch_layout(View("v", "Board", "board", None, None, None))
+    assert not can_switch_layout(None)
+    assert next_layout("table") == "list" and next_layout("list") == "table"
 
 
 def test_trash_question_warns_about_other_data_sources():
