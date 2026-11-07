@@ -26,8 +26,10 @@ from .database import (
     DbRequest,
     DbRows,
     can_edit_rows,
+    can_switch_layout,
     find_row,
     grid_columns,
+    next_layout,
     people_names,
     replace_row,
     rows_markdown,
@@ -233,6 +235,7 @@ class NotionTUI(App):
     BINDINGS = [
         Binding("slash", "focus_search", "search"),
         Binding("v", "db_edit_mode", "view/edit rows"),
+        Binding("t", "db_layout", "list/table"),
         Binding("e", "edit", "edit"),
         Binding("n", "new", "new"),
         Binding("d", "trash", "trash"),
@@ -274,6 +277,7 @@ class NotionTUI(App):
         self._row_writes = asyncio.Lock()  # row changes reach Notion one at a time, in the order made
         self._trashed: dict[str, list[tuple[dict, int]]] = {}  # data source → rows deleted here and where they were
         self._query_from_grid = False  # the filter line was opened from the grid: go back there
+        self._layouts: dict[str, str] = {}  # view → layout picked with `t`; not saved, gone at quit
         self._meta_fresh: set[str] = set()  # data sources whose views and schema were fetched this session
         self.links: list[Link] = []  # links in the page shown in the preview
         self._link_history: list[Page] = []  # pages left by following a link, newest last
@@ -553,7 +557,8 @@ class NotionTUI(App):
             await self._render_page(page, cached[0])
             self._prefetch_next()
             return
-        await self._render_page(page, cached[0] if cached else None, note="refreshing…")
+        # The cached preview is in the view's own layout: not worth a flash under a layout picked with `t`.
+        await self._render_page(page, cached[0] if cached and not self._custom_layout(page) else None, note="refreshing…")
         self.fetch_preview(page)
 
     @work(exclusive=True, group="preview")
@@ -573,7 +578,7 @@ class NotionTUI(App):
                 else:
                     await self._render_message(f"Could not load page: {err}")
             return
-        self.cache.put_content(page, markdown)
+        self._cache_preview(page, markdown)
         if self.current and self.current.id == page.id:
             await self._render_page(page, markdown)
             self.refresh_bindings()
@@ -603,6 +608,9 @@ class NotionTUI(App):
                 req.error = f"query not applied: {err}"
         req.sorts = sorts_override if sorts_override is not None else (view.sorts if view else None)
         req.columns = view_columns(view, schema)
+        if can_switch_layout(view):
+            req.layout = self._layouts.get(view.id, view.type)
+            req.custom_layout = req.layout != view.type
         return req
 
     def _query_filter(self, data_source_id: str, text: str, schema: list[dict], view: View | None) -> dict | None:
@@ -651,7 +659,7 @@ class NotionTUI(App):
         return changed
 
     async def _fetch_db(self, page: Page) -> str:
-        """Query the database's rows for its current view and query line; return the table."""
+        """Query the database's rows for its current view and query line; return its preview."""
         if self.cache.schema(page.id) is None:  # first time: views and schema decide what to ask for
             await self._fetch_meta(page.id)
         req = self._db_request(page.id)
@@ -664,7 +672,19 @@ class NotionTUI(App):
                 rows, cursor = await ntn.query_rows(page.id, req.filter, req.sorts)
         if self.current and self.current.id == page.id:
             self.db_rows = DbRows(page.id, rows, cursor, req.columns, req.filter, req.sorts)
-        return rows_markdown(rows, cursor is not None, req.columns)
+        return self._rows_preview(page.id, rows, cursor is not None, req.columns)
+
+    def _rows_preview(self, data_source_id: str, rows: list[dict], has_more: bool, columns: list[str] | None) -> str:
+        """The rows as Markdown, in the layout the view has now: `t` may have changed it during a fetch."""
+        return rows_markdown(rows, has_more, columns, self._db_request(data_source_id).layout)
+
+    def _custom_layout(self, page: Page) -> bool:
+        return page.kind == "data_source" and self._db_request(page.id).custom_layout
+
+    def _cache_preview(self, page: Page, markdown: str) -> None:
+        """Keep the preview for instant display, unless it shows a layout picked with `t`: those aren't saved."""
+        if not self._custom_layout(page):
+            self.cache.put_content(page, markdown)
 
     @work(exclusive=True, group="dbmeta")
     async def refresh_db_meta(self, page: Page) -> None:
@@ -691,6 +711,7 @@ class NotionTUI(App):
             return
         if rows := self._current_rows():
             rows.cursor = None
+            rows.reloading = True
         self.query_one("#preview-pane").border_subtitle = "refreshing…"
         self._render_db_bar(loading=True)
         self.fetch_preview(page)
@@ -726,12 +747,14 @@ class NotionTUI(App):
             parts.append(f"sort: {sort_label(req.sorts, req.schema) or 'none'} (custom)")
         else:
             parts.append(f"sort: {sort_label(req.sorts, req.schema)}" if req.sorts else "unsorted")
+        editing = self._editing_rows()
+        if req.custom_layout and not editing:
+            parts.append(f"layout: {req.layout} (custom)")
         rows = self._current_rows()
         if rows is None or loading:
             parts.append("loading…")
         else:
             parts.append(f"{len(rows.rows)}{'+' if rows.cursor else ''} row{'' if len(rows.rows) == 1 and not rows.cursor else 's'}")
-        editing = self._editing_rows()
         if editing and rows is not None and not loading and not rows.rows:
             parts.append("press n to add a row")
         info.update(Text(" · ".join(parts), no_wrap=True, overflow="ellipsis"))
@@ -890,9 +913,9 @@ class NotionTUI(App):
         return rows if rows and rows.page_id == page.id else None
 
     async def _store_rows(self, page: Page, rows: DbRows) -> None:
-        """After rows changed: refresh the Markdown table View mode shows, and the cached copy."""
-        markdown = rows_markdown(rows.rows, rows.cursor is not None, rows.columns)
-        self.cache.put_content(page, markdown)
+        """After rows or their layout changed: refresh the Markdown preview View mode shows, and the cached copy."""
+        markdown = self._rows_preview(page.id, rows.rows, rows.cursor is not None, rows.columns)
+        self._cache_preview(page, markdown)
         await self._render_page(page, markdown)
 
     def action_row_new(self) -> None:
@@ -1023,6 +1046,8 @@ class NotionTUI(App):
             if action == "db_more":
                 rows = self._current_rows()
                 return bool(rows and rows.cursor)
+            if action == "db_layout":
+                return can_switch_layout(self._db_request(self.current.id).view) and not self._editing_rows()
         if action == "focus_grid":
             return self._is_db() and self.query_one(RowGrid).display
         if action == "links":
@@ -1041,6 +1066,16 @@ class NotionTUI(App):
         index = req.views.index(req.view) if req.view in req.views else 0
         self._save_db_state(self.current.id, view_id=req.views[(index + step) % len(req.views)].id)
         self._reload_db()
+
+    async def action_db_layout(self) -> None:
+        """Lay out the current view's rows the other way, from the rows already loaded."""
+        req = self._db_request(self.current.id)
+        self._layouts[req.view.id] = next_layout(req.layout)
+        rows = self._current_rows()
+        if rows and rows.rows and not rows.reloading:
+            await self._store_rows(self.current, rows)
+        else:  # no rows yet, a load error to keep on screen, or a reload that will draw in the new layout
+            self._render_db_bar(loading=bool(rows and rows.reloading))
 
     def action_db_filter(self) -> None:
         if not self._is_db():
@@ -1124,9 +1159,7 @@ class NotionTUI(App):
         self._learn_people(page.id, more)
         rows.rows += more
         rows.cursor = cursor
-        markdown = rows_markdown(rows.rows, cursor is not None, rows.columns)
-        self.cache.put_content(page, markdown)
-        await self._render_page(page, markdown)
+        await self._store_rows(page, rows)
         self.refresh_bindings()
 
     def _prefetch_next(self) -> None:
@@ -1143,7 +1176,7 @@ class NotionTUI(App):
         if page.kind == "data_source" and self.cache.schema(page.id) is None:
             return  # a first look at a database costs a call per view: leave it to the real fetch
         try:
-            self.cache.put_content(page, await self._fetch_content(page))
+            self._cache_preview(page, await self._fetch_content(page))
             await self._complete_path(page)
         except NtnError:
             pass  # best effort; the real fetch will report errors

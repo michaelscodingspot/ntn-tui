@@ -1,10 +1,10 @@
-"""Edit mode end to end: the real app, driven by keys, on a fake Notion."""
+"""Database View and Edit modes end to end: the real app, driven by keys, on a fake Notion."""
 
 import asyncio
 import copy
 
 import pytest
-from textual.widgets import Input
+from textual.widgets import Input, Markdown
 
 from notion_tui import ntn
 from notion_tui.app import NotionTUI, PageList, PreviewScroll
@@ -43,6 +43,9 @@ class FakeNotion:
         self.rows = [row("a", "Alpha"), row("b", "Beta")]
         self.trashed = {}
         self.calls = []
+        self.queries = 0
+        self.cursor = None  # set: the first batch of rows says there are more
+        self.gate = None  # set: row queries wait for this event
         self.fail = False
         for name in ("search", "get_schema", "list_view_ids", "query_rows", "update_row", "create_row", "trash", "restore"):
             monkeypatch.setattr(ntn, name, getattr(self, name))
@@ -57,7 +60,10 @@ class FakeNotion:
         raise NtnError("views come from the cache here")
 
     async def query_rows(self, data_source_id, filter=None, sorts=None, start_cursor=None, page_size=100):
-        return copy.deepcopy(self.rows), None
+        self.queries += 1
+        if self.gate:
+            await self.gate.wait()
+        return copy.deepcopy(self.rows), None if start_cursor else self.cursor
 
     def _check(self):
         if self.fail:
@@ -411,5 +417,95 @@ def test_filter_from_the_grid_returns_to_the_grid(tmp_path, notion):
         await go(app, pilot, "v", "f")  # split view, where closing the line would otherwise focus the list
         await go(app, pilot, "escape")
         assert grid.has_focus
+
+    drive(tmp_path, script, edit=False)
+
+
+def preview(app):
+    return app.query_one("#preview", Markdown).source
+
+
+def info(app):
+    return str(app.query_one("#dbinfo").render())
+
+
+def test_t_switches_the_layout_without_asking_notion_or_saving(tmp_path, notion):
+    async def script(app, pilot, grid):
+        assert preview(app).startswith("- **Alpha**")  # a list view opens as a list
+        assert "layout" not in info(app)
+        queries = notion.queries
+        await go(app, pilot, "t")
+        assert preview(app).startswith("| Name |")
+        assert "layout: table (custom)" in info(app)
+        assert notion.queries == queries
+        assert app.cache.db_state("ds") == (None, "", None)
+        assert app.cache.content("ds")[0].startswith("- **Alpha**")
+        await go(app, pilot, "F")  # a reload draws the picked layout, and doesn't cache it either
+        assert preview(app).startswith("| Name |")
+        assert app.cache.content("ds")[0].startswith("- **Alpha**")
+        await go(app, pilot, "t")
+        assert preview(app).startswith("- **Alpha**")
+        assert "layout" not in info(app)
+
+    drive(tmp_path, script, edit=False)
+
+
+def test_a_picked_layout_stays_with_its_view_until_the_app_quits(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "t")
+        await go(app, pilot, "right_square_bracket")
+        await go(app, pilot, "left_square_bracket")
+        assert preview(app).startswith("| Name |")
+        await go(app, pilot, "r")
+        assert preview(app).startswith("| Name |")
+
+    drive(tmp_path, script, edit=False)
+
+
+def test_t_does_nothing_in_edit_mode(tmp_path, notion):
+    async def script(app, pilot, grid):
+        assert grid.display
+        before = preview(app)
+        await go(app, pilot, "v", "t")
+        assert grid.has_focus and preview(app) == before
+        assert not app._layouts
+
+    drive(tmp_path, script)
+
+
+def test_t_does_nothing_on_a_board_view(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "right_square_bracket")
+        before = preview(app)
+        await go(app, pilot, "t")
+        assert preview(app) == before and not app._layouts
+
+    drive(tmp_path, script, edit=False)
+
+
+def test_more_rows_stay_in_the_picked_layout(tmp_path, notion):
+    notion.cursor = "next"
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "t")
+        await go(app, pilot, "m")
+        assert preview(app).startswith("| Name |")
+        assert preview(app).count("Alpha") == 2
+
+    drive(tmp_path, script, edit=False)
+
+
+def test_t_during_a_reload_leaves_the_old_rows_alone_and_the_reload_draws_it(tmp_path, notion):
+    async def script(app, pilot, grid):
+        notion.gate = asyncio.Event()
+        await pilot.press("F")
+        await pilot.pause(0.1)
+        await pilot.press("t")
+        await pilot.pause(0.1)
+        assert preview(app).startswith("- **Alpha**")
+        assert "layout: table (custom)" in info(app) and "loading…" in info(app)
+        notion.gate.set()
+        await settle(app, pilot)
+        assert preview(app).startswith("| Name |")
 
     drive(tmp_path, script, edit=False)

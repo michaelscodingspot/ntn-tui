@@ -3,7 +3,7 @@
 Terminal UI for Notion, built on the [`ntn`](https://developers.notion.com) CLI.
 Layout: page list on the left, Markdown preview on the right. The preview's top line
 shows the page's path, e.g. `Notes / Quick Notes`.
-Databases are listed too (marked `▦`); their preview is a table of rows, shown through the
+Databases are listed too (marked `▦`); their preview shows the rows as a table or list, through the
 database's saved views, with a filter line and a sort picker (see [Databases](#databases)).
 Database rows can be edited in the app (see [Edit mode](#edit-mode)). Edit and trash work on pages only.
 
@@ -55,6 +55,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `F`            | database: clear filter and sort          |
 | `m`            | database: load 100 more rows             |
 | `v`            | database: switch View / Edit mode        |
+| `t`            | database, View mode: list / table layout |
 | `,`            | options                                  |
 | `ctrl+alt+w`   | narrow width: middle 70% of the window   |
 | `?`            | help panel                               |
@@ -88,12 +89,15 @@ The database keys act on the database highlighted in the list; focus stays there
 - A view shows its rows with the view's filter (and quick filters), sorts and visible
   columns. Board, calendar, gallery, timeline and map views are shown as a table, with
   the type next to the name. Form, chart and dashboard views are skipped.
+- List views show as a bullet list: the title, then the row's values. `t` switches a list or
+  table view between the two layouts, in View mode only. The switch lasts until the app
+  quits and is not saved; the line above the rows shows `layout: … (custom)` meanwhile.
 - Views, filter and sort changes stay in this app; only [Edit mode](#edit-mode) writes to Notion.
 - The current view, filter line, sort and mode are remembered per database.
 
 ### Edit mode
 
-`v` switches a database between View (the Markdown table) and Edit (a grid with a cell
+`v` switches a database between View (the Markdown table or list) and Edit (a grid with a cell
 cursor); the top right of the preview shows which. Edit mode works on list and table views.
 Other views stay in View mode, and a database last used in Edit mode comes back to it.
 Highlighting such a database in the list shows the grid while `j` / `k` stay on the list:
