@@ -5,7 +5,7 @@ Layout: page list on the left, Markdown preview on the right. The preview's top 
 shows the page's path, e.g. `Notes / Quick Notes`.
 Databases are listed too (marked `▦`); their preview is a table of rows, shown through the
 database's saved views, with a filter line and a sort picker (see [Databases](#databases)).
-Edit and trash work on pages only.
+Editing works on pages only; trash works on pages and databases.
 
 ![Page list with Markdown preview](docs/screenshots/main.png)
 
@@ -44,7 +44,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `/`            | search (instant from cache, then Notion) |
 | `e`            | edit page in `$VISUAL` / `$EDITOR`       |
 | `n`            | new page: title and place, then `$EDITOR` |
-| `d`            | trash page (asks first)                  |
+| `d`            | trash page or database (asks first)      |
 | `o`            | open page in Notion web app, focus tab   |
 | `l`            | links and images in page: pick one       |
 | `backspace`    | back to the page a link came from        |
@@ -149,7 +149,9 @@ through `narrow-window-watcher.py` in my-automations, which saves the setting in
   `ntn api v1/data_sources/<id>` for its properties,
   `ntn api v1/pages` to create a titled page under its chosen parent (page, database, or the
   workspace top level),
-  `ntn pages get/edit/trash` for page actions.
+  `ntn pages get/edit/trash` for page actions,
+  `ntn api v1/databases/<id>` to trash a database (the whole database with its rows, found
+  through the listed data source's parent).
 - Calls run in the background; the screen never waits on Notion.
 - Editing (`e`): the page body is read with `ntn pages get --json` and saved with
   `ntn pages edit` (Markdown on stdin), both while the TUI is on screen. Only the editor runs

@@ -28,6 +28,7 @@ from .database import (
     people_names,
     rows_markdown,
     sort_label,
+    trash_question,
     view_columns,
     view_label,
 )
@@ -1002,7 +1003,10 @@ class NotionTUI(App):
 
     def action_trash(self) -> None:
         page = self.current
-        if not self._is_page(page, "trashed"):
+        if page is None:
+            return
+        if page.kind == "data_source":
+            self.ask_trash_database(page)
             return
 
         def confirmed(yes: bool | None) -> None:
@@ -1019,10 +1023,42 @@ class NotionTUI(App):
             self.notify(str(err), title="ntn trash failed", severity="error")
             return
         self.cache.forget(page.id)
-        if self._created and self._created.id == page.id:
+        await self._drop_trashed(page, {page.id})
+
+    @work(exclusive=True, group="trash-lookup")
+    async def ask_trash_database(self, page: Page) -> None:
+        """Find the database behind the listed data source, then confirm: it may hold more than this table."""
+        try:
+            database = await ntn.database_of(page.id)
+        except NtnError as err:
+            self.notify(str(err), title="Could not look up the database", severity="error")
+            return
+
+        def confirmed(yes: bool | None) -> None:
+            if yes:
+                self.trash_database(page, database)
+
+        self.push_screen(ConfirmScreen(trash_question(page.title, len(database.data_source_ids))), confirmed)
+
+    @work(group="trash")
+    async def trash_database(self, page: Page, database: ntn.Database) -> None:
+        try:
+            await ntn.trash_database(database.id)
+        except NtnError as err:
+            self.notify(str(err), title="Could not trash the database", severity="error")
+            return
+        self.cache.forget_database(database.ids)
+        await self._drop_trashed(page, database.ids)
+
+    async def _drop_trashed(self, page: Page, ids: set[str]) -> None:
+        """Take a trashed page or database, and any rows inside it, off the list."""
+        def gone(p: Page) -> bool:
+            return p.id in ids or p.parent_id in ids
+
+        if self._created and gone(self._created):
             self._created = None
         index = next((i for i, p in enumerate(self.shown) if p.id == page.id), 0)
-        await self._show_pages([p for p in self.loaded if p.id != page.id], fallback_index=index)
+        await self._show_pages([p for p in self.loaded if not gone(p)], fallback_index=index)
         self.notify(f"Trashed “{page.title}”")
 
     def action_options(self) -> None:

@@ -1,4 +1,4 @@
-from notion_tui.database import rows_markdown, sort_label, view_columns
+from notion_tui.database import rows_markdown, sort_label, trash_question, view_columns
 from notion_tui.ntn import View
 
 SCHEMA = [
@@ -36,3 +36,8 @@ def test_rows_markdown_with_view_columns_keeps_empty_drops_unrendered():
     assert lines[0] == "| Name | Priority |"
     assert lines[2] == "| a |  |"
     assert "Press m for more" in md
+
+
+def test_trash_question_warns_about_other_data_sources():
+    assert trash_question("Books", 1) == "Move database “Books” and all its rows to the Notion trash?"
+    assert "all 3 of its data sources" in trash_question("Books", 3)

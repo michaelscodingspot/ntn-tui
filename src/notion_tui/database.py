@@ -16,6 +16,13 @@ _HIDDEN_COLUMN_TYPES = _UNRENDERED_TYPES | {"created_time", "last_edited_time", 
 SKIPPED_VIEW_TYPES = {"form", "chart", "dashboard"}
 
 
+def trash_question(title: str, data_sources: int) -> str:
+    """The confirmation for trashing a database; says so when more than the listed table goes with it."""
+    if data_sources > 1:
+        return f"Move database “{title}”, with all {data_sources} of its data sources and their rows, to the Notion trash?"
+    return f"Move database “{title}” and all its rows to the Notion trash?"
+
+
 def rows_markdown(rows: list[dict], has_more: bool, columns: list[str] | None = None) -> str:
     """A database's rows as a Markdown table.
 
