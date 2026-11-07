@@ -1,4 +1,4 @@
-"""Edit mode end to end: the real app, driven by keys, on a fake Notion."""
+"""Database View and Edit modes end to end: the real app, driven by keys, on a fake Notion."""
 
 import asyncio
 import copy
@@ -44,6 +44,8 @@ class FakeNotion:
         self.trashed = {}
         self.calls = []
         self.queries = 0
+        self.cursor = None  # set: the first batch of rows says there are more
+        self.gate = None  # set: row queries wait for this event
         self.fail = False
         for name in ("search", "get_schema", "list_view_ids", "query_rows", "update_row", "create_row", "trash", "restore"):
             monkeypatch.setattr(ntn, name, getattr(self, name))
@@ -59,7 +61,9 @@ class FakeNotion:
 
     async def query_rows(self, data_source_id, filter=None, sorts=None, start_cursor=None, page_size=100):
         self.queries += 1
-        return copy.deepcopy(self.rows), None
+        if self.gate:
+            await self.gate.wait()
+        return copy.deepcopy(self.rows), None if start_cursor else self.cursor
 
     def _check(self):
         if self.fail:
@@ -435,6 +439,10 @@ def test_t_switches_the_layout_without_asking_notion_or_saving(tmp_path, notion)
         assert "layout: table (custom)" in info(app)
         assert notion.queries == queries
         assert app.cache.db_state("ds") == (None, "", None)
+        assert app.cache.content("ds")[0].startswith("- **Alpha**")
+        await go(app, pilot, "F")  # a reload draws the picked layout, and doesn't cache it either
+        assert preview(app).startswith("| Name |")
+        assert app.cache.content("ds")[0].startswith("- **Alpha**")
         await go(app, pilot, "t")
         assert preview(app).startswith("- **Alpha**")
         assert "layout" not in info(app)
@@ -471,5 +479,33 @@ def test_t_does_nothing_on_a_board_view(tmp_path, notion):
         before = preview(app)
         await go(app, pilot, "t")
         assert preview(app) == before and not app._layouts
+
+    drive(tmp_path, script, edit=False)
+
+
+def test_more_rows_stay_in_the_picked_layout(tmp_path, notion):
+    notion.cursor = "next"
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "t")
+        await go(app, pilot, "m")
+        assert preview(app).startswith("| Name |")
+        assert preview(app).count("Alpha") == 2
+
+    drive(tmp_path, script, edit=False)
+
+
+def test_t_during_a_reload_leaves_the_old_rows_alone_and_the_reload_draws_it(tmp_path, notion):
+    async def script(app, pilot, grid):
+        notion.gate = asyncio.Event()
+        await pilot.press("F")
+        await pilot.pause(0.1)
+        await pilot.press("t")
+        await pilot.pause(0.1)
+        assert preview(app).startswith("- **Alpha**")
+        assert "layout: table (custom)" in info(app) and "loading…" in info(app)
+        notion.gate.set()
+        await settle(app, pilot)
+        assert preview(app).startswith("| Name |")
 
     drive(tmp_path, script, edit=False)

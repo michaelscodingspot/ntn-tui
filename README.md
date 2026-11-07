@@ -3,7 +3,7 @@
 Terminal UI for Notion, built on the [`ntn`](https://developers.notion.com) CLI.
 Layout: page list on the left, Markdown preview on the right. The preview's top line
 shows the page's path, e.g. `Notes / Quick Notes`.
-Databases are listed too (marked `▦`); their preview is a table of rows, shown through the
+Databases are listed too (marked `▦`); their preview shows the rows as a table or list, through the
 database's saved views, with a filter line and a sort picker (see [Databases](#databases)).
 Database rows can be edited in the app (see [Edit mode](#edit-mode)). Edit and trash work on pages only.
 
@@ -97,7 +97,7 @@ The database keys act on the database highlighted in the list; focus stays there
 
 ### Edit mode
 
-`v` switches a database between View (the Markdown table) and Edit (a grid with a cell
+`v` switches a database between View (the Markdown table or list) and Edit (a grid with a cell
 cursor); the top right of the preview shows which. Edit mode works on list and table views.
 Other views stay in View mode, and a database last used in Edit mode comes back to it.
 Highlighting such a database in the list shows the grid while `j` / `k` stay on the list:
