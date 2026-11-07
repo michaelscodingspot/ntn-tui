@@ -1,0 +1,32 @@
+  / search pages1…                                                              Recent · 61+ pages · 139 entries hidden
+╭─ Pages ──────────────────────────────────╮╭────────────────────────────────────────────────────────────────────────╮
+│ ToDo                                     ││ ToDo                                                                   │
+│ Herdr and tailscale                      ││                                                                        │
+│ Software development / programming       ││   •                                                         לרכב טסט   │
+│ Notes                                    ││   •                                         הבא לשבוע לקבוע לשכן צבע   │
+│ הילד התפתחות                             ││   •                                               קרח לאמבטיות מדחום   │
+│ ▦ Blog Tasks                             ││   •                                                          אופניים   │
+│ Looking for work/job                     ││   • Audiobookshelf                                                     │
+│ Ilana אילנה                              ││   • Linux on bedroom pc with bookshelf, home assistant, tailscale, …   │
+│ Startup & project ideas                  ││   •                                             פאדל או בוריס להחליט   │
+│ Treatment Products                       ││   • Play everything                                                    │
+│ Plugs פלאגים                             ││   • in "mail" (aerc) when in desktop mode, add alt + s keybinding to   │
+│ Yael יעל                                 ││     enter "copy mode" to be able to select and copy text to            │
+│ ▦ TV & Movies                           ▁││     clipboard                                                          │
+│ ▦ Books                                  ││   • in "mail" (aerc) add shortcut "l" to show selection popup with     │
+│ Julia יוליה                              ││     all attachments and all links in the mail body. choosing one       │
+│ Obics Blog posts                         ││     will open a link in browser or download and open attachment        │
+│ Linux technical stuff                    ││     (like image ) with local "x" script                                │
+│ Obics                                    ││   • Jib and mail as apps                                               │
+│ Obics TODO                               ││   • nui: Add the bindings Ctrl‑o and Ctrl‑i (like in nvim) to          │
+│ Clothes size בגדים מידות                 ││     navigate back and forward in navigation history.                   │
+│ BYD                                      ││   • nui: backup everything / create sandbox notion account             │
+│ DataDog bill before and after            ││   • nui: allow interactive in-app view and edit for database when      │
+│ ▦ People                                 ││     view mode is list . that means showing selected row, going         │
+│ 05-2026 נזילה תביעה                      ││     up/down between rows (j/k and up/down arrows), adding row (n),     │
+│ 17 יעקב בזכרון בית / דירה                ││     deleting row (x), and editing row. you can create new database     │
+│ ▦ Feedback contacts                      ││     page in notion to verify and experiment                            │
+│ Outreach LinkedIn inmail English         ││                                                                        │
+│ Outreach LinkedIn connect flow English   ││                                                                        │
+╰──────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────╯
+ / search  e edit  n new  x delete  o open in Notion  r refresh  , options  ? help  q quit                  ▏^p palette

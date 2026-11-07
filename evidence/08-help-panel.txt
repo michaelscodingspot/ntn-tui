@@ -1,0 +1,40 @@
+  / search pages1…                       Recent · 61+ pages · 139 entries hidden ▏
+╭─ Pages ──────────────────────────────────╮╭─────────────────────────────────╮  ▏         ↑ k Cursor up
+│ ToDo                                     ││ ToDo                            │  ▏         ↓ j Cursor down
+│ Herdr and tailscale                      ││                                 │  ▏           ← Scroll Left
+│ Software development / programming       ││   •                לרכב טסט     │  ▏           → Scroll Right
+│ Notes                                    ││   •    לשבוע לקבוע לשכן צבע     │  ▏        home Scroll Home
+│ הילד התפתחות                             ││                         הבא     │  ▏         end Scroll End
+│ ▦ Blog Tasks                             ││   •      קרח לאמבטיות מדחום     │  ▏        pgup Page Up
+│ Looking for work/job                     ││   •                 אופניים     │  ▏        pgdn Page Down
+│ Ilana אילנה                              ││   • Audiobookshelf              │  ▏       ^pgup Page Left
+│ Startup & project ideas                  ││   • Linux on bedroom pc         │  ▏       ^pgdn Page Right
+│ Treatment Products                       ││     with bookshelf, home        │  ▏           ⏎ Select
+│ Plugs פלאגים                             ││     assistant, tailscale, …     │  ▏           g top
+│ Yael יעל                                 ││   •    פאדל או בוריס להחליט     │  ▏           G bottom
+│ ▦ TV & Movies                            ││   • Play everything             │  ▏
+│ ▦ Books                                  ││   • in "mail" (aerc) when       │  ▏         tab Focus Next
+│ Julia יוליה                              ││     in desktop mode, add        │  ▏   shift+tab Focus Previous
+│ Obics Blog posts                         ││     alt + s keybinding to       │  ▏  ^c super+c Copy selected text
+│ Linux technical stuff                    ││     enter "copy mode" to be     │  ▏
+│ Obics                                    ││     able to select and copy     │  ▏        ^q q Quit Quit the app and
+│ Obics TODO                               ││     text to clipboard           │  ▏             return to the command
+│ Clothes size בגדים מידות                 ││   • in "mail" (aerc) add        │  ▏             prompt.
+│ BYD                                      ││     shortcut "l" to show        │  ▏           / search
+│ DataDog bill before and after           ▆││     selection popup with        │  ▏           e edit
+│ ▦ People                                 ││     all attachments and all     │  ▏           n new
+│ 05-2026 נזילה תביעה                      ││     links in the mail body.     │  ▏           x delete
+│ 17 יעקב בזכרון בית / דירה                ││     choosing one will open   ▂▂ │  ▏           o open in Notion
+│ ▦ Feedback contacts                      ││     a link in browser or        │  ▏           r refresh
+│ Outreach LinkedIn inmail English         ││     download and open           │  ▏           , options
+│ Outreach LinkedIn connect flow English   ││     attachment (like image      │  ▏  ctrl+alt+w narrow width (70%)
+│ Outreach claude chrome                   ││     ) with local "x" script     │  ▏         esc back
+│ Outreach, פידבק ,לאנשים פניות            ││   • Jib and mail as apps        │  ▏           ? help
+│ Outreach LinkedIn Connect Flow Hebrew    ││   • nui: Add the bindings       │  ▏          ^p palette Open the
+│ Penlink                                  ││     Ctrl‑o and Ctrl‑i (like     │  ▏             command palette
+│ Technical notes to remember              ││     in nvim) to navigate        │  ▏
+│ Metrics                                  ││     back and forward in         │  ▏
+│ Outreach LinkedIn inmail flow Hebrew     ││     navigation history.         │  ▏
+│ Investors to follow up with              ││   • nui: backup everything      │  ▏
+╰──────────────────────────────────────────╯╰─────────────────────────────────╯  ▏
+ / search  e edit  n new  x delete  o open in Notion  r refresh  , op▏^p palette ▏

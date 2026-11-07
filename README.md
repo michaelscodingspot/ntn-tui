@@ -44,7 +44,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `/`            | search (instant from cache, then Notion) |
 | `e`            | edit page in `$VISUAL` / `$EDITOR`       |
 | `n`            | new page: title and place, then `$EDITOR` |
-| `d`            | trash page (asks first)                  |
+| `x`            | delete page: moves to trash (asks first) |
 | `o`            | open page in Notion web app, focus tab   |
 | `l`            | links and images in page: pick one       |
 | `backspace`    | back to the page a link came from        |

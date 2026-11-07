@@ -52,7 +52,7 @@ class ConfirmScreen(ModalScreen[bool]):
         with Vertical(id="dialog"):
             yield Label(self.question, markup=False)
             with Horizontal(id="buttons"):
-                yield Button("Trash (y)", variant="error", id="yes")
+                yield Button("Delete (y)", variant="error", id="yes")
                 yield Button("Cancel (n)", id="no")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

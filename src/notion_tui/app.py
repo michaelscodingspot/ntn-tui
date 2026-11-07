@@ -220,7 +220,7 @@ class NotionTUI(App):
         Binding("slash", "focus_search", "search"),
         Binding("e", "edit", "edit"),
         Binding("n", "new", "new"),
-        Binding("d", "trash", "trash"),
+        Binding("x", "trash", "delete"),
         Binding("o", "browser", "open in Notion"),
         Binding("l", "links", "links"),
         Binding("backspace", "link_back", "back to linking page"),
