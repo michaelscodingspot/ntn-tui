@@ -20,6 +20,13 @@ EDITABLE_VIEW_TYPES = {"table", "list"}
 LAYOUTS = ("table", "list")
 
 
+def trash_question(title: str, data_sources: int) -> str:
+    """The confirmation for trashing a database; says so when more than the listed table goes with it."""
+    if data_sources > 1:
+        return f"Move database “{title}”, with all {data_sources} of its data sources and their rows, to the Notion trash?"
+    return f"Move database “{title}” and all its rows to the Notion trash?"
+
+
 def rows_markdown(rows: list[dict], has_more: bool, columns: list[str] | None = None, layout: str = "table") -> str:
     """A database's rows as a Markdown table, or a bullet list with `layout` "list".
 

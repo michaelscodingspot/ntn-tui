@@ -195,6 +195,15 @@ class Cache:
             self.db.execute("DELETE FROM page_content WHERE page_id = ?", (page_id,))
             self.db.execute("DELETE FROM pages WHERE id = ?", (page_id,))
             self.db.execute("DELETE FROM nodes WHERE id = ?", (page_id,))
+            for table in ("views", "data_source_schema", "db_state"):
+                self.db.execute(f"DELETE FROM {table} WHERE data_source_id = ?", (page_id,))
+
+    def forget_database(self, ids: set[str]) -> None:
+        """Forget a database, given its ID and its data sources' IDs, and the rows inside it."""
+        marks = ",".join("?" * len(ids))
+        rows = self.db.execute(f"SELECT id FROM nodes WHERE parent_id IN ({marks})", tuple(ids)).fetchall()
+        for node_id in ids | {row[0] for row in rows}:
+            self.forget(node_id)
 
     # ---------- databases: views, schema, current state ----------
 
