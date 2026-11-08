@@ -293,8 +293,8 @@ def test_copy_a_cell(tmp_path, notion, key):
 
 
 def test_copy_gives_the_full_text_not_the_cut_cell(tmp_path, notion):
-    long = "שלום עולם " * 6 + "the end"
-    notion.rows[0] = row("a", long)  # longer than a cell, right-to-left words
+    long = "שלום עולם " * 30 + "the end"
+    notion.rows[0] = row("a", long)  # longer than the grid is wide, right-to-left words
 
     async def script(app, pilot, grid):
         copied = []
@@ -559,3 +559,38 @@ def test_t_during_a_reload_leaves_the_old_rows_alone_and_the_reload_draws_it(tmp
         assert preview(app).startswith("| Name |")
 
     drive(tmp_path, script, edit=False)
+
+
+def test_a_long_title_fills_the_grid_width(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "enter")
+        app.screen.query_one(Input).value = "word " * 40
+        await go(app, pilot, "enter")
+        shown = cell(grid, "a", "Name")
+        room = grid.scrollable_content_region.width
+        assert shown.endswith("…") and len(shown) > 40
+        assert room - 4 <= grid.virtual_size.width <= room  # wide enough to fill it, never past it
+        await pilot.resize_terminal(160, 40)
+        await settle(app, pilot)
+        wider = cell(grid, "a", "Name")
+        assert len(wider) > len(shown)  # a wider grid shows more of it
+        await pilot.resize_terminal(100, 40)
+        await settle(app, pilot)
+        assert len(cell(grid, "a", "Name")) < len(shown)  # and a narrower one less, never past its edge
+        assert grid.virtual_size.width <= grid.scrollable_content_region.width
+
+    drive(tmp_path, script)
+
+
+def test_more_rows_than_fit_still_fill_the_width_without_scrolling_sideways(tmp_path, notion):
+    notion.rows = [row(f"r{i}", f"{i} " + "word " * 30) for i in range(60)] + [row("he", "שלום " * 30)]
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter")
+        room = grid.scrollable_content_region.width
+        assert grid.virtual_size.height > grid.size.height  # taller than the pane
+        assert room - 4 <= grid.virtual_size.width <= room
+        hebrew = cell(grid, "he", "Name")
+        assert hebrew.startswith("…") and "שלום" in hebrew  # cut at its logical end, shown on the left
+
+    drive(tmp_path, script)

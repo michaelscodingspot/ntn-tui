@@ -5,8 +5,8 @@ This project is called **notion-tui**, or **ntn-tui** in short.
 It's a terminal UI for Notion (Python 3.13, Textual, run with `uv run notion-tui`): page list left, Markdown preview right, edit in `$EDITOR`.
 
 - `src/notion_tui/app.py` — Textual app: list, preview, search, database view tabs / filter line / paging, View / Edit mode and row writes, key bindings.
-- `src/notion_tui/database.py` — pure database-preview helpers: rows table and list layouts, view and grid columns, labels, sort labels. Tested in `tests/test_database.py`.
-- `src/notion_tui/grid.py` — the Edit mode grid: rows and columns with a cell cursor, row keys, cell copy, saving marks. Driven end to end in `tests/test_row_editing.py`.
+- `src/notion_tui/database.py` — pure database-preview helpers: rows table and list layouts, view and grid columns, grid column widths (how columns share the width), labels, sort labels. Tested in `tests/test_database.py`.
+- `src/notion_tui/grid.py` — the Edit mode grid: rows and columns with a cell cursor, row keys, cell copy, saving marks; columns share the grid's width and cells are cut with "…" only where they don't fit. Driven end to end in `tests/test_row_editing.py`.
 - `src/notion_tui/rows.py` — pure row editing helpers: which property types are editable and how, typed text ↔ Notion property values. Tested in `tests/test_rows.py`.
 - `src/notion_tui/modals.py` — modal dialogs: trash confirmation, options, new page (title + tree location picker), database sort picker, link picker, cell editors of the grid (text input, pick list).
 - `src/notion_tui/new_page.py` — pure new-page helpers: where a new page can go (inside / next to the highlighted page, top level), keeping a new page listed until Notion's search finds it. Tested in `tests/test_new_page.py`.

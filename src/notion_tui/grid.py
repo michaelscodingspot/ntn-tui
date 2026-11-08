@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rich.cells import cell_len, set_cell_size
 from rich.text import Text
 from textual.binding import Binding
 from textual.coordinate import Coordinate
@@ -9,12 +10,15 @@ from textual.geometry import Offset, Region
 from textual.widgets import DataTable
 
 from .bidi import is_rtl, reorder_text
+from .database import column_widths
 from .rows import cell_text
 
 NEW_ROW = "new-row"  # key of the row shown while its title is typed and sent
 
 
-def _cell(text: str) -> Text:
+def _cell(text: str, width: int | None) -> Text:
+    if width is not None and cell_len(text) > width:
+        text = set_cell_size(text, width - 1) + "…"  # cut the logical text, then order RTL words
     return Text(reorder_text(text, is_rtl(text)), no_wrap=True)
 
 
@@ -38,27 +42,76 @@ class RowGrid(DataTable):
     def __init__(self, **kwargs) -> None:
         super().__init__(cursor_type="cell", **kwargs)
         self.names: list[str] = []  # the property behind each column
+        self.heads: list[str] = []  # each column's header text
         self.source: list[dict] | None = None  # the rows list this grid was drawn from
-        self.count = 0  # real rows drawn
+        self.texts: dict[str, list[str]] = {}  # each row's cells in full, by row key, in row order
+        self.widths: list[int | None] = []  # longest text each column shows; None: not laid out yet
+
+    @property
+    def count(self) -> int:
+        """Real rows drawn, not counting the row a new title is typed into."""
+        return len(self.texts) - (NEW_ROW in self.texts)
 
     def stale(self, rows: list[dict], names: list[str]) -> bool:
         return rows is not self.source or len(rows) != self.count or names != self.names
 
     def show(self, rows: list[dict], names: list[str]) -> None:
         """Draw the rows, keeping the cursor on the same row and column when they are still there."""
-        row_id, at = self.current_row_id, self.cursor_coordinate
-        self.clear(columns=True)
-        self.names, self.source, self.count = names, rows, len(rows)
-        for name in names:
-            self.add_column(name.strip(), key=name)
-        for row in rows:
-            self.add_row(*self._cells(row), key=row["id"], label=" ")
-        index = next((i for i, row in enumerate(rows) if row["id"] == row_id), min(at.row, len(rows) - 1))
-        self.move_cursor(row=max(index, 0), column=min(at.column, max(len(names) - 1, 0)), animate=False)
+        self.names, self.heads, self.source = names, [name.strip() for name in names], rows
+        self.texts = {row["id"]: self._texts(row) for row in rows}
+        self._fit()
+        self._draw()
 
-    def _cells(self, row: dict) -> list[Text]:
+    def _draw(self) -> None:
+        """Build the table from the kept texts, keeping the cursor and the row marks.
+        Rebuilt rather than updated cell by cell: Textual re-measures a whole column for each narrower cell."""
+        row_id, at = self.current_row_id, self.cursor_coordinate
+        marks = {key: row.label for key, row in self.rows.items()}
+        self.clear(columns=True)
+        for name, head in zip(self.names, self.heads):
+            self.add_column(head, key=name)
+        for key in self.texts:
+            self.add_row(*self._cells(key), key=key, label=marks.get(key, " "))
+        keys = list(self.texts)
+        index = keys.index(row_id) if row_id in self.texts else min(at.row, len(keys) - 1)
+        self.move_cursor(row=max(index, 0), column=min(at.column, max(len(self.names) - 1, 0)), animate=False)
+
+    def _texts(self, row: dict) -> list[str]:
         props = row.get("properties", {})
-        return [_cell(cell_text(props[name]) if name in props else "") for name in self.names]
+        return [cell_text(props[name]) if name in props else "" for name in self.names]
+
+    def _cells(self, row_id: str) -> list[Text]:
+        return [_cell(text, width) for text, width in zip(self.texts[row_id], self.widths)]
+
+    def _fit(self) -> bool:
+        """Share the grid's width between its columns, so text is cut only where it doesn't fit.
+        True when the widths changed."""
+        old = self.widths
+        if not self.size.width:  # not laid out yet: sized on the first resize
+            self.widths = [None] * len(self.names)
+        else:
+            natural = [max(map(cell_len, column)) for column in zip(self.heads, *self.texts.values())]
+            gutter = 1 + 2 * self.cell_padding  # the column of row marks
+            room = self.scrollable_content_region.width - gutter - 2 * self.cell_padding * len(self.heads)
+            self.widths = column_widths(natural, room)
+        return self.widths != old
+
+    def _refit(self) -> bool:
+        """Size the columns again, rebuilding the table when their widths changed."""
+        if self._fit():
+            self._draw()
+            return True
+        return False
+
+    def _changed(self, row_id: str) -> None:
+        """Draw a row whose texts changed, or the whole table when that moved the column widths."""
+        if not self._refit():
+            for name, cell in zip(self.names, self._cells(row_id)):
+                self.update_cell(row_id, name, cell, update_width=True)
+
+    def on_resize(self) -> None:
+        if self.texts:
+            self._refit()
 
     @property
     def current_row_id(self) -> str | None:
@@ -74,13 +127,14 @@ class RowGrid(DataTable):
         return row_id in self.rows
 
     def set_cell(self, row_id: str, name: str, text: str) -> None:
-        if self.has_row(row_id):
-            self.update_cell(row_id, name, _cell(text), update_width=True)
+        if self.has_row(row_id) and name in self.names:
+            self.texts[row_id][self.names.index(name)] = text
+            self._changed(row_id)
 
     def redraw_row(self, row: dict) -> None:
         if self.has_row(row["id"]):
-            for name, cell in zip(self.names, self._cells(row)):
-                self.update_cell(row["id"], name, cell, update_width=True)
+            self.texts[row["id"]] = self._texts(row)
+            self._changed(row["id"])
 
     def mark(self, row_id: str, mark: str) -> None:
         """Show one character in the row's gutter: … saving, ✓ saved, space nothing."""
@@ -96,8 +150,8 @@ class RowGrid(DataTable):
         """Remove a row the app already took out of its rows list."""
         if self.has_row(row_id):
             self.remove_row(row_id)
-            if row_id != NEW_ROW:
-                self.count -= 1
+            del self.texts[row_id]
+            self._refit()
 
     def select_row(self, row_id: str) -> None:
         if self.has_row(row_id):
@@ -105,7 +159,8 @@ class RowGrid(DataTable):
 
     def add_new_row(self, name: str) -> None:
         """Add the empty row a new title is typed into and put the cursor on its title cell."""
-        self.add_row(*["" for _ in self.names], key=NEW_ROW, label=" ")
+        self.texts[NEW_ROW] = ["" for _ in self.names]
+        self.add_row(*self._cells(NEW_ROW), key=NEW_ROW, label=" ")
         self.move_cursor(row=self.row_count - 1, column=self.names.index(name), animate=False)
 
     def cell_region(self) -> Region:
