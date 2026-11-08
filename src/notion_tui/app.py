@@ -18,7 +18,7 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Footer, Input, Label, ListItem, ListView, Markdown, Static
 
-from . import desktop, editor, narrow, ntn, query, rows as row_edit
+from . import claude, desktop, editor, narrow, ntn, query, rows as row_edit
 from .bidi import BidiMarkdown, BidiMixin
 from .cache import MAX_DEPTH, Cache
 from .database import (
@@ -1034,6 +1034,22 @@ class NotionTUI(App):
         found = self._cursor_row()
         if found:
             self._edit_in_editor(ntn.row_page(found[1]))
+
+    def action_row_claude(self) -> None:
+        found, name = self._cursor_row(), self.query_one(RowGrid).current_name
+        prop = found[1]["properties"].get(name) if found and name else None
+        text = row_edit.cell_text(prop).strip() if prop else ""
+        if not text:
+            self.notify("The cell is empty: no task to give Claude.", severity="warning")
+            return
+        self._start_claude(text)
+
+    @work(group="claude")
+    async def _start_claude(self, text: str) -> None:
+        try:
+            self.notify(await claude.start_session(text))
+        except (OSError, RuntimeError) as error:
+            self.notify(str(error), title="Claude session not started", severity="error", timeout=10)
 
     def _show_db_error(self, message: str) -> None:
         error = self.query_one("#dberror", Static)

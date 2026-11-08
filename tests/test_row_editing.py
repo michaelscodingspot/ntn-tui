@@ -509,3 +509,27 @@ def test_t_during_a_reload_leaves_the_old_rows_alone_and_the_reload_draws_it(tmp
         assert preview(app).startswith("| Name |")
 
     drive(tmp_path, script, edit=False)
+
+
+def test_ctrl_o_starts_claude_on_the_cell_text(tmp_path, notion, monkeypatch):
+    from notion_tui import claude
+
+    started = []
+
+    async def fake_start(text):
+        started.append(text)
+        return "opened"
+
+    monkeypatch.setattr(claude, "start_session", fake_start)
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "j", "ctrl+o")
+        assert started == ["Beta"]
+
+    drive(tmp_path, script)
+
+
+def test_task_prompt():
+    from notion_tui.claude import task_prompt
+
+    assert task_prompt("  fix the login page ") == "task: fix the login page\n"

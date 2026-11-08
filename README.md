@@ -112,8 +112,14 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | `x`                 | delete the row, to Notion's trash, without asking   |
 | `u`                 | bring back the last deleted row (several in a row work) |
 | `e`                 | edit the row's body in `$EDITOR`                    |
+| `ctrl+o`            | Claude Code session on the cell: prompt `task: <cell text>`, asks which folder (below) |
 | `v`                 | back to View mode, focus stays on the right side    |
 | `esc`               | back to View mode and to the page list              |
+
+`ctrl+o` works like jira-board's: a new Ptyxis tab runs my-automations'
+`mail-claude-session.sh`, which asks which folder to run in (`/c/Obics/li`, `/c/aut`,
+`/c/Obics/int`, a free mr clone, or the current folder) and starts Claude there in its own tmux
+session. With no Ptyxis or display the session starts detached and its name is shown.
 
 Each change is saved to Notion at once: `…` in the row's gutter while saving, `✓` when done.
 If Notion refuses, the old value comes back with a message. A row changed so it no longer
