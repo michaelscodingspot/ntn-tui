@@ -1,4 +1,4 @@
-from notion_tui.database import can_switch_layout, next_layout, rows_markdown, sort_label, view_columns
+from notion_tui.database import can_switch_layout, next_layout, rows_markdown, sort_label, trash_question, view_columns
 from notion_tui.ntn import View
 
 SCHEMA = [
@@ -50,3 +50,8 @@ def test_layouts_switch_only_on_list_and_table_views():
     assert not can_switch_layout(View("v", "Board", "board", None, None, None))
     assert not can_switch_layout(None)
     assert next_layout("table") == "list" and next_layout("list") == "table"
+
+
+def test_trash_question_warns_about_other_data_sources():
+    assert trash_question("Books", 1) == "Move database “Books” and all its rows to the Notion trash?"
+    assert "all 3 of its data sources" in trash_question("Books", 3)

@@ -338,6 +338,33 @@ async def trash(page_id: str) -> None:
     await _run("pages", "trash", page_id, "--yes")
 
 
+@dataclass(frozen=True)
+class Database:
+    """The database a listed data source belongs to. Trashing it takes all its data sources and rows along."""
+
+    id: str
+    data_source_ids: tuple[str, ...]
+
+    @property
+    def ids(self) -> set[str]:
+        return {self.id, *self.data_source_ids}
+
+
+async def database_of(data_source_id: str) -> Database:
+    """The database holding a data source (two ntn calls: the list only knows the data source's ID)."""
+    try:
+        source = json.loads(await _run("api", f"v1/data_sources/{data_source_id}", "-X", "GET"))
+        database_id = source["parent"]["database_id"]
+        database = json.loads(await _run("api", f"v1/databases/{database_id}", "-X", "GET"))
+        return Database(database_id, tuple(s["id"] for s in database["data_sources"]))
+    except (ValueError, KeyError, TypeError) as err:
+        raise NtnError(f"Unexpected `ntn api` output for a database: {err!r}") from err
+
+
+async def trash_database(database_id: str) -> None:
+    await _run("api", f"v1/databases/{database_id}", "-X", "PATCH", "-d", json.dumps({"in_trash": True}))
+
+
 def _object(out: str) -> dict:
     try:
         return json.loads(out)
