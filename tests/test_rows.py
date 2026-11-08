@@ -21,10 +21,10 @@ def test_text_values():
     assert rows.parse_text("email", "a@b.c")[0] == {"email": "a@b.c"}
 
 
-def test_long_text_is_split_for_notion_and_cut_for_the_cell():
+def test_long_text_is_split_for_notion_and_kept_whole_for_the_cell():
     value, shown = rows.parse_text("rich_text", "x" * 2500)
     assert [len(part["text"]["content"]) for part in value["rich_text"]] == [2000, 500]
-    assert len(shown) == rows.CELL_WIDTH and shown.endswith("…")
+    assert shown == "x" * 2500
 
 
 def test_numbers():
