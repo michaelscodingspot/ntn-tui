@@ -42,7 +42,7 @@ def cell_text(prop: dict) -> str:
 
 
 def _one_line(text: str) -> str:
-    return text.replace("\n", " ")  # the grid cuts it to its column's width
+    return text.replace("\n", " ")  # cutting it to a width is the caller's job
 
 
 def edit_text(prop: dict) -> str:

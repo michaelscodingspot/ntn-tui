@@ -1,5 +1,12 @@
 from notion_tui import database
-from notion_tui.database import can_switch_layout, next_layout, rows_markdown, sort_label, trash_question, view_columns
+from notion_tui.database import (
+    can_switch_layout,
+    next_layout,
+    rows_markdown,
+    sort_label,
+    trash_question,
+    view_columns,
+)
 from notion_tui.ntn import View
 
 SCHEMA = [
