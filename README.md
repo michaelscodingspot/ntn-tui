@@ -113,6 +113,7 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | `u`                 | bring back the last deleted row (several in a row work) |
 | `e`                 | edit the row's body in `$EDITOR`                    |
 | `ctrl+o`            | Claude Code session on the cell in herdr (below)    |
+| `y` / `ctrl+c`      | copy the cell's full value to the clipboard         |
 | `v`                 | back to View mode, focus stays on the right side    |
 | `esc`               | back to View mode and to the page list              |
 

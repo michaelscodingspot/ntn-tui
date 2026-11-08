@@ -829,12 +829,18 @@ class NotionTUI(App):
         row = find_row(rows.rows, self.query_one(RowGrid).current_row_id) if rows else None
         return (rows, row) if row else None
 
-    def on_data_table_cell_selected(self, event: RowGrid.CellSelected) -> None:
+    def _cursor_cell(self) -> tuple[dict, str, dict] | None:
+        """The row, column name and property under the grid's cursor."""
         found, name = self._cursor_row(), self.query_one(RowGrid).current_name
         if not found or name is None or name not in found[1]["properties"]:
+            return None
+        return found[1], name, found[1]["properties"][name]
+
+    def on_data_table_cell_selected(self, event: RowGrid.CellSelected) -> None:
+        cell = self._cursor_cell()
+        if not cell:
             return
-        row = found[1]
-        prop = row["properties"][name]
+        row, name, prop = cell
         kind = prop.get("type", "")
         match row_edit.editor(kind):
             case "check":
@@ -1058,6 +1064,22 @@ class NotionTUI(App):
             self.notify(await claude.start_session(repo, text, lambda message: self.notify(message, timeout=15)))
         except (OSError, RuntimeError, KeyError) as error:
             self.notify(str(error), title="Claude session not started", severity="error", timeout=10)
+
+    def action_row_copy(self) -> None:
+        """Copy the full value of the cell under the grid's cursor to the clipboard."""
+        cell = self._cursor_cell()
+        if not cell:
+            return
+        row, name, prop = cell
+        if self.query_one(RowGrid).saving(row["id"]):
+            self.notify("Still saving the row; copy again when it's saved.", severity="warning")
+            return
+        text = row_edit.copy_text(prop)
+        if not text:
+            self.notify("The cell is empty.", severity="warning")
+            return
+        self.copy_to_clipboard(text)
+        self.notify(f"Copied {name.strip()}.", timeout=2)
 
     def _show_db_error(self, message: str) -> None:
         error = self.query_one("#dberror", Static)
