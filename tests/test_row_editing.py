@@ -11,7 +11,7 @@ from notion_tui.app import NotionTUI, PageList, PreviewScroll
 from notion_tui.cache import Cache
 from notion_tui.grid import RowGrid
 from notion_tui.links import Link
-from notion_tui.modals import CellPickScreen, CellTextScreen, LinkPickScreen, RepoPickScreen
+from notion_tui.modals import CellPickScreen, CellTextScreen, LinkPickScreen, PromptEditScreen, RepoPickScreen
 from notion_tui.ntn import NtnError, Page, View
 from notion_tui.options import Options
 
@@ -564,8 +564,8 @@ def test_t_during_a_reload_leaves_the_old_rows_alone_and_the_reload_draws_it(tmp
 def test_ctrl_o_asks_the_repo_and_starts_claude_on_the_cell_text(tmp_path, notion, monkeypatch):
     started = []
 
-    async def fake_start(repo, text, say):
-        started.append((repo, text))
+    async def fake_start(repo, text, prompt, say):
+        started.append((repo, text, prompt))
         return "opened"
 
     monkeypatch.setattr(claude, "start_session", fake_start)
@@ -574,7 +574,9 @@ def test_ctrl_o_asks_the_repo_and_starts_claude_on_the_cell_text(tmp_path, notio
         await go(app, pilot, "enter", "j", "ctrl+o")
         assert isinstance(app.screen, RepoPickScreen)
         await go(app, pilot, "j", "enter")  # notion-tui
-        assert started == [(claude.Repo("notion-tui", "/c/notion-tui"), "Beta")]
+        assert isinstance(app.screen, PromptEditScreen) and started == []
+        await go(app, pilot, *" now", "ctrl+s")
+        assert started == [(claude.Repo("notion-tui", "/c/notion-tui"), "Beta", "task: Beta now")]
 
     drive(tmp_path, script)
 
@@ -582,7 +584,7 @@ def test_ctrl_o_asks_the_repo_and_starts_claude_on_the_cell_text(tmp_path, notio
 def test_ctrl_o_other_repo_is_typed(tmp_path, notion, monkeypatch):
     started = []
 
-    async def fake_start(repo, text, say):
+    async def fake_start(repo, text, prompt, say):
         started.append(repo)
         return "opened"
 
@@ -591,7 +593,7 @@ def test_ctrl_o_other_repo_is_typed(tmp_path, notion, monkeypatch):
     async def script(app, pilot, grid):
         await go(app, pilot, "enter", "ctrl+o")
         await go(app, pilot, *["j"] * len(claude.REPOS), "enter")
-        await go(app, pilot, *"blog", "enter")
+        await go(app, pilot, *"blog", "enter", "ctrl+s")
         assert started == [claude.Repo("blog", "/c/blog")]
 
     drive(tmp_path, script)
@@ -604,5 +606,16 @@ def test_ctrl_o_cancelled_starts_nothing(tmp_path, notion, monkeypatch):
     async def script(app, pilot, grid):
         await go(app, pilot, "enter", "ctrl+o", "escape")
         assert not isinstance(app.screen, RepoPickScreen) and started == []
+
+    drive(tmp_path, script)
+
+
+def test_ctrl_o_prompt_cancelled_starts_nothing(tmp_path, notion, monkeypatch):
+    started = []
+    monkeypatch.setattr(claude, "start_session", lambda *a: started.append(a))
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "ctrl+o", "enter", "escape")
+        assert not isinstance(app.screen, PromptEditScreen) and started == []
 
     drive(tmp_path, script)

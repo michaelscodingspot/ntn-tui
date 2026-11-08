@@ -117,8 +117,9 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | `v`                 | back to View mode, focus stays on the right side    |
 | `esc`               | back to View mode and to the page list              |
 
-`ctrl+o` asks which repo (aut, notion-tui, jira-board, Obics, or a folder you type) and starts
-Claude Code in herdr with the prompt `task: <cell text>`, the cell's full text:
+`ctrl+o` asks which repo (aut, notion-tui, jira-board, Obics, or a folder you type), then opens
+the prompt `task: <cell text>` (the cell's full text) in an editor box to change it (`ctrl+s`
+sends, `esc` cancels), and starts Claude Code in herdr with it:
 
 - **Obics**: a free `/c/Obics/mrXXX` clone is claimed (`jira-board --claim-clone`), pulled, and
   opened in a new herdr space.

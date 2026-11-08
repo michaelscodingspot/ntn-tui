@@ -47,6 +47,7 @@ from .modals import (
     LinkPickScreen,
     NewPageScreen,
     OptionsScreen,
+    PromptEditScreen,
     RepoPickScreen,
     SortScreen,
 )
@@ -1051,17 +1052,24 @@ class NotionTUI(App):
             return
 
         def picked(choice: str | None) -> None:
-            if choice:
-                repo = next((r for r in claude.REPOS if r.label == choice), None)
-                self._start_claude(repo or claude.Repo(choice, claude.repo_path(choice)), text)
+            if not choice:
+                return
+            repo = next((r for r in claude.REPOS if r.label == choice), None) or claude.Repo(
+                choice, claude.repo_path(choice))
+
+            def edited(prompt: str | None) -> None:
+                if prompt:
+                    self._start_claude(repo, text, prompt)
+
+            self.push_screen(PromptEditScreen(claude.task_prompt(text), repo.label), edited)
 
         self.push_screen(RepoPickScreen([r.label for r in claude.REPOS]), picked)
 
     @work(group="claude")
-    async def _start_claude(self, repo: claude.Repo, text: str) -> None:
+    async def _start_claude(self, repo: claude.Repo, text: str, prompt: str) -> None:
         self.notify(f"Starting Claude in {repo.label}…")
         try:
-            self.notify(await claude.start_session(repo, text, lambda message: self.notify(message, timeout=15)))
+            self.notify(await claude.start_session(repo, text, prompt, lambda message: self.notify(message, timeout=15)))
         except (OSError, RuntimeError, KeyError) as error:
             self.notify(str(error), title="Claude session not started", severity="error", timeout=10)
 

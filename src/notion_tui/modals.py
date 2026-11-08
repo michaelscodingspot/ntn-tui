@@ -1,5 +1,5 @@
 """Modal dialogs: trash confirmation, options, new page, the database sort picker, the link picker,
-the repo picker of a Claude session, and the editors that open over a cell of the database grid."""
+the repo picker and prompt editor of a Claude session, and the editors that open over a cell of the database grid."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from textual.widgets import (
     RadioButton,
     RadioSet,
     SelectionList,
+    TextArea,
 )
 
 from . import narrow
@@ -459,6 +460,46 @@ class RepoPickScreen(ModalScreen[str | None]):
         event.stop()
         if event.value.strip():
             self.dismiss(event.value.strip())
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class PromptEditScreen(ModalScreen[str | None]):
+    """Edit the prompt a Claude session starts with. Returns the edited text, or None on esc."""
+
+    AUTO_FOCUS = "TextArea"
+    BINDINGS = [
+        Binding("ctrl+s", "send", "send", priority=True),
+        Binding("escape", "cancel", "cancel", priority=True),
+    ]
+    DEFAULT_CSS = """
+    PromptEditScreen { align: center middle; }
+    #prompt { width: 90%; max-width: 110; height: 70%; padding: 1 2; border: round $accent; background: $surface; }
+    #prompt TextArea { height: 1fr; }
+    #prompt .hint { color: $text-muted; margin-top: 1; }
+    """
+
+    def __init__(self, prompt: str, where: str) -> None:
+        super().__init__()
+        self.prompt = prompt
+        self.where = where
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="prompt"):
+            yield TextArea(self.prompt, soft_wrap=True)
+            yield Label("ctrl+s send · esc cancel", classes="hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#prompt").border_title = f"Prompt for Claude in {self.where}"
+        self.query_one(TextArea).move_cursor(self.query_one(TextArea).document.end)
+
+    def action_send(self) -> None:
+        text = self.query_one(TextArea).text.strip()
+        if text:
+            self.dismiss(text)
+        else:
+            self.notify("The prompt is empty.", severity="warning")
 
     def action_cancel(self) -> None:
         self.dismiss(None)

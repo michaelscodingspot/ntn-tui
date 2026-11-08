@@ -9,7 +9,7 @@ user picks:
   that has the repo's main checkout open. With no such space, one is created first.
 
 Claude starts in the new space's pane (`herdr agent start`) and gets "task: <cell text>" as its
-first prompt (`herdr agent prompt`). Then herdr's kitty window is raised.
+first prompt (`herdr agent prompt`), as edited by the user. Then herdr's kitty window is raised.
 """
 
 from __future__ import annotations
@@ -156,8 +156,9 @@ async def _open_worktree(repo: str, text: str) -> tuple[str, str]:
     return f"{Path(top).name} worktree {branch}", result["root_pane"]["pane_id"]
 
 
-async def start_session(repo: Repo, text: str, say: Callable[[str], None] = lambda _: None) -> str:
-    """Open the session; returns what happened. Raises RuntimeError when it could not start.
+async def start_session(repo: Repo, text: str, prompt: str, say: Callable[[str], None] = lambda _: None) -> str:
+    """Open the session on `prompt`; the worktree branch is named from the cell `text`. Returns
+    what happened. Raises RuntimeError when it could not start.
 
     Claude asks whether to trust a folder it hasn't seen, which every new worktree is. That
     question is left to the user: herdr's window is raised, `say` tells them, and the prompt
@@ -178,6 +179,6 @@ async def start_session(repo: Repo, text: str, say: Callable[[str], None] = lamb
         await desktop.raise_herdr_window()
         say(f"Answer Claude's question in herdr ({where}); the task follows.")
         await _herdr("agent", "wait", name, "--until", "idle", "--timeout", str(_ANSWER_TIMEOUT_MS))
-    await _herdr("agent", "prompt", name, task_prompt(text))
+    await _herdr("agent", "prompt", name, prompt)
     await desktop.raise_herdr_window()
     return f"Claude started in herdr: {where}"
