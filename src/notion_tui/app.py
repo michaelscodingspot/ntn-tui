@@ -802,10 +802,13 @@ class NotionTUI(App):
         self.query_one(RowGrid).focus()
 
     def action_db_edit_mode(self) -> None:
-        if not self._is_db():
-            return
+        if self._is_db():
+            self._go_to_grid(toggle=True)
+
+    def _go_to_grid(self, toggle: bool) -> None:
+        """Focus the grid, switching to Edit mode first if needed; `toggle` lets a focused grid go back to View."""
         grid = self.query_one(RowGrid)
-        if grid.display and not grid.has_focus:  # a grid in plain sight: `v` means "let me at it"
+        if grid.display and (not grid.has_focus or not toggle):  # a grid in plain sight: "let me at it"
             grid.focus()
             return
         req = self._db_request(self.current.id)
@@ -1239,6 +1242,9 @@ class NotionTUI(App):
         return page is not None
 
     def action_edit(self) -> None:
+        if self._is_db():  # a database's rows are edited in the grid
+            self._go_to_grid(toggle=False)
+            return
         page = self.current
         if self._is_page(page, "edited"):
             self._edit_in_editor(page)

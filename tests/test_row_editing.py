@@ -183,6 +183,24 @@ def test_v_switches_modes_and_remembers(tmp_path, notion):
     drive(tmp_path, script, edit=False)
 
 
+def test_e_goes_into_edit_mode_and_the_grid(tmp_path, notion):
+    async def script(app, pilot, grid):
+        assert not grid.display and app.query_one(PageList).has_focus
+        await go(app, pilot, "e")
+        assert grid.display and grid.has_focus and app.cache.db_edit_mode("ds")
+
+    drive(tmp_path, script, edit=False)
+
+
+def test_e_from_the_list_goes_into_a_showing_grid(tmp_path, notion):
+    async def script(app, pilot, grid):
+        assert grid.display and app.query_one(PageList).has_focus
+        await go(app, pilot, "e")
+        assert grid.display and grid.has_focus and app.cache.db_edit_mode("ds")
+
+    drive(tmp_path, script)
+
+
 def test_esc_leaves_edit_mode(tmp_path, notion):
     async def script(app, pilot, grid):
         await go(app, pilot, "enter")

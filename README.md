@@ -101,7 +101,8 @@ The database keys act on the database highlighted in the list; focus stays there
 cursor); the top right of the preview shows which. Edit mode works on list and table views.
 Other views stay in View mode, and a database last used in Edit mode comes back to it.
 Highlighting such a database in the list shows the grid while `j` / `k` stay on the list:
-`→`, `l`, `v` or `enter` goes into the grid (`enter` full screen).
+`→`, `l`, `v` or `enter` goes into the grid (`enter` full screen). On a database, `e` switches
+to Edit mode and goes into the grid.
 
 | Key                 | In the grid                                         |
 |---------------------|-----------------------------------------------------|
