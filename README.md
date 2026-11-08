@@ -112,14 +112,21 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | `x`                 | delete the row, to Notion's trash, without asking   |
 | `u`                 | bring back the last deleted row (several in a row work) |
 | `e`                 | edit the row's body in `$EDITOR`                    |
-| `ctrl+o`            | Claude Code session on the cell: prompt `task: <cell text>`, asks which folder (below) |
+| `ctrl+o`            | Claude Code session on the cell in herdr (below)    |
 | `v`                 | back to View mode, focus stays on the right side    |
 | `esc`               | back to View mode and to the page list              |
 
-`ctrl+o` works like jira-board's: a new Ptyxis tab runs my-automations'
-`mail-claude-session.sh`, which asks which folder to run in (`/c/Obics/li`, `/c/aut`,
-`/c/Obics/int`, a free mr clone, or the current folder) and starts Claude there in its own tmux
-session. With no Ptyxis or display the session starts detached and its name is shown.
+`ctrl+o` asks which repo (aut, notion-tui, jira-board, Obics, or a folder you type) and starts
+Claude Code in herdr with the prompt `task: <cell text>`, the cell's full text:
+
+- **Obics**: a free `/c/Obics/mrXXX` clone is claimed (`jira-board --claim-clone`), pulled, and
+  opened in a new herdr space.
+- **Other repos**: `herdr worktree create` makes a new worktree, named from the task's first
+  words, grouped under the space showing the repo's main checkout. With no such space, one is
+  created first.
+
+Claude asks whether to trust a new worktree folder; herdr's kitty window comes forward to answer
+it, and the task is sent once Claude is ready.
 
 Each change is saved to Notion at once: `…` in the row's gutter while saving, `✓` when done.
 If Notion refuses, the old value comes back with a message. A row changed so it no longer

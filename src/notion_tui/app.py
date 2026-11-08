@@ -47,6 +47,7 @@ from .modals import (
     LinkPickScreen,
     NewPageScreen,
     OptionsScreen,
+    RepoPickScreen,
     SortScreen,
 )
 from .new_page import Location, NewPage, nearby_locations, page_path, with_unindexed
@@ -1038,17 +1039,24 @@ class NotionTUI(App):
     def action_row_claude(self) -> None:
         found, name = self._cursor_row(), self.query_one(RowGrid).current_name
         prop = found[1]["properties"].get(name) if found and name else None
-        text = row_edit.cell_text(prop).strip() if prop else ""
+        text = ntn.value_text(prop).strip() if prop else ""  # in full: the grid cuts long cells
         if not text:
             self.notify("The cell is empty: no task to give Claude.", severity="warning")
             return
-        self._start_claude(text)
+
+        def picked(choice: str | None) -> None:
+            if choice:
+                repo = next((r for r in claude.REPOS if r.label == choice), None)
+                self._start_claude(repo or claude.Repo(choice, claude.repo_path(choice)), text)
+
+        self.push_screen(RepoPickScreen([r.label for r in claude.REPOS]), picked)
 
     @work(group="claude")
-    async def _start_claude(self, text: str) -> None:
+    async def _start_claude(self, repo: claude.Repo, text: str) -> None:
+        self.notify(f"Starting Claude in {repo.label}…")
         try:
-            self.notify(await claude.start_session(text))
-        except (OSError, RuntimeError) as error:
+            self.notify(await claude.start_session(repo, text, lambda message: self.notify(message, timeout=15)))
+        except (OSError, RuntimeError, KeyError) as error:
             self.notify(str(error), title="Claude session not started", severity="error", timeout=10)
 
     def _show_db_error(self, message: str) -> None:
