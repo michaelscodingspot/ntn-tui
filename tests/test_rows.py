@@ -53,6 +53,15 @@ def test_edit_text_keeps_a_dates_time():
     assert rows.parse_text("date", rows.edit_text(prop))[0]["date"]["start"] == "2026-11-20T10:00:00.000+02:00"
 
 
+def test_copy_text_is_the_full_value():
+    assert rows.copy_text({"type": "date", "date": {"start": "2026-11-20T10:00:00.000+02:00", "end": "2026-11-21"}}) == "2026-11-20T10:00:00.000+02:00 → 2026-11-21"
+    assert rows.copy_text({"type": "created_time", "created_time": "2026-11-01T08:30:00.000Z"}) == "2026-11-01T08:30:00.000Z"
+    long = "שלום עולם " * 10 + "end"
+    assert rows.copy_text({"type": "rich_text", "rich_text": [{"plain_text": long}]}) == long
+    assert rows.copy_text({"type": "rich_text", "rich_text": [{"plain_text": "one\ntwo"}]}) == "one\ntwo"
+    assert rows.copy_text({"type": "date", "date": None}) == ""
+
+
 def test_pick_values():
     assert rows.pick_value("select", ["Done"]) == ({"select": {"name": "Done"}}, "Done")
     assert rows.pick_value("status", []) == ({"status": None}, "")
