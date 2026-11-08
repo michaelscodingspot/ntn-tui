@@ -145,7 +145,7 @@ def test_last_mode_opens_without_taking_focus_from_the_list(tmp_path, notion):
     drive(tmp_path, script)
 
 
-@pytest.mark.parametrize("key", ["right", "l", "v"])
+@pytest.mark.parametrize("key", ["right", "l", "v", "e"])
 def test_keys_from_the_list_go_into_a_showing_grid(tmp_path, notion, key):
     async def script(app, pilot, grid):
         assert app.query_one(PageList).has_focus
@@ -179,6 +179,17 @@ def test_v_switches_modes_and_remembers(tmp_path, notion):
         await go(app, pilot, "v")
         assert not grid.display and not app.cache.db_edit_mode("ds")
         assert app.query_one(PreviewScroll).has_focus
+
+    drive(tmp_path, script, edit=False)
+
+
+def test_e_goes_into_edit_mode_and_the_grid(tmp_path, notion):
+    async def script(app, pilot, grid):
+        assert not grid.display and app.query_one(PageList).has_focus
+        await go(app, pilot, "e")
+        assert grid.display and grid.has_focus and app.cache.db_edit_mode("ds")
+        await go(app, pilot, "escape", "e")  # esc left Edit mode; e goes back in
+        assert grid.display and grid.has_focus and app.cache.db_edit_mode("ds")
 
     drive(tmp_path, script, edit=False)
 
@@ -257,6 +268,8 @@ def test_board_view_stays_in_view_mode(tmp_path, notion):
         assert not grid.display and app.query_one(PreviewScroll).has_focus
         await go(app, pilot, "v")
         assert not grid.display and app.cache.db_edit_mode("ds")
+        await go(app, pilot, "e")
+        assert not grid.display and app.query_one(PreviewScroll).has_focus
         await go(app, pilot, "left_square_bracket")
         assert grid.display and grid.has_focus
 

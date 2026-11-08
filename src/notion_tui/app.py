@@ -806,8 +806,15 @@ class NotionTUI(App):
     def action_db_edit_mode(self) -> None:
         if not self._is_db():
             return
+        if self.query_one(RowGrid).has_focus:  # `v` in the grid: back to View
+            self._set_edit_mode(False)
+        else:
+            self._go_to_grid()
+
+    def _go_to_grid(self) -> None:
+        """Focus the grid, switching the database to Edit mode first if it isn't showing."""
         grid = self.query_one(RowGrid)
-        if grid.display and not grid.has_focus:  # a grid in plain sight: `v` means "let me at it"
+        if grid.display:  # a grid in plain sight: "let me at it"
             grid.focus()
             return
         req = self._db_request(self.current.id)
@@ -816,7 +823,7 @@ class NotionTUI(App):
         elif not can_edit_rows(req.view):
             self.notify(f"Edit mode works on list and table views. This one is a {req.view.type}.", severity="warning")
         else:
-            self._set_edit_mode(not self._editing_rows())
+            self._set_edit_mode(True)
 
     def _set_edit_mode(self, on: bool) -> None:
         self.cache.put_db_edit_mode(self.current.id, on)
@@ -1271,6 +1278,9 @@ class NotionTUI(App):
         return page is not None
 
     def action_edit(self) -> None:
+        if self._is_db():  # a database's rows are edited in the grid
+            self._go_to_grid()
+            return
         page = self.current
         if self._is_page(page, "edited"):
             self._edit_in_editor(page)
