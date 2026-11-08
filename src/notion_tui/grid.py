@@ -32,6 +32,7 @@ class RowGrid(DataTable):
         Binding("x", "app.row_trash", "delete row"),
         Binding("u", "app.row_restore", "undo delete"),
         Binding("e", "app.row_body", "row body"),
+        Binding("y,ctrl+c", "app.row_copy", "copy cell"),
     ]
 
     def __init__(self, **kwargs) -> None:
@@ -87,6 +88,9 @@ class RowGrid(DataTable):
             self.rows[row_id].label = Text(mark)
             self._clear_caches()
             self.refresh()
+
+    def saving(self, row_id: str) -> bool:
+        return self.has_row(row_id) and str(self.rows[row_id].label) == "…"
 
     def drop_row(self, row_id: str) -> None:
         """Remove a row the app already took out of its rows list."""
