@@ -89,6 +89,9 @@ class RowGrid(DataTable):
             self._clear_caches()
             self.refresh()
 
+    def saving(self, row_id: str) -> bool:
+        return self.has_row(row_id) and str(self.rows[row_id].label) == "…"
+
     def drop_row(self, row_id: str) -> None:
         """Remove a row the app already took out of its rows list."""
         if self.has_row(row_id):

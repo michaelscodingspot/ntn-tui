@@ -828,12 +828,18 @@ class NotionTUI(App):
         row = find_row(rows.rows, self.query_one(RowGrid).current_row_id) if rows else None
         return (rows, row) if row else None
 
-    def on_data_table_cell_selected(self, event: RowGrid.CellSelected) -> None:
+    def _cursor_cell(self) -> tuple[dict, str, dict] | None:
+        """The row, column name and property under the grid's cursor."""
         found, name = self._cursor_row(), self.query_one(RowGrid).current_name
         if not found or name is None or name not in found[1]["properties"]:
+            return None
+        return found[1], name, found[1]["properties"][name]
+
+    def on_data_table_cell_selected(self, event: RowGrid.CellSelected) -> None:
+        cell = self._cursor_cell()
+        if not cell:
             return
-        row = found[1]
-        prop = row["properties"][name]
+        row, name, prop = cell
         kind = prop.get("type", "")
         match row_edit.editor(kind):
             case "check":
@@ -1037,11 +1043,14 @@ class NotionTUI(App):
 
     def action_row_copy(self) -> None:
         """Copy the full value of the cell under the grid's cursor to the clipboard."""
-        found, name = self._cursor_row(), self.query_one(RowGrid).current_name
-        if not found or name is None:
+        cell = self._cursor_cell()
+        if not cell:
             return
-        prop = found[1]["properties"].get(name)
-        text = ntn.value_text(prop) if prop else ""
+        row, name, prop = cell
+        if self.query_one(RowGrid).saving(row["id"]):
+            self.notify("Still saving the row; copy again when it's saved.", severity="warning")
+            return
+        text = row_edit.copy_text(prop)
         if not text:
             self.notify("The cell is empty.", severity="warning")
             return

@@ -51,9 +51,19 @@ def edit_text(prop: dict) -> str:
     """A property's value as the text the cell editor starts with."""
     if prop.get("type") != "date":
         return value_text(prop).replace("\n", " ")
-    value = prop.get("date") or {}  # in full, so a time of day isn't lost
-    start, end = value.get("start", ""), value.get("end")
-    return f"{start} → {end}" if end else start
+    return copy_text(prop)  # in full, so a time of day isn't lost
+
+
+def copy_text(prop: dict) -> str:
+    """A property's full value for the clipboard: not cut for the cell, line breaks and times of day kept."""
+    kind = prop.get("type")
+    if kind == "date":
+        value = prop.get("date") or {}
+        start, end = value.get("start", ""), value.get("end")
+        return f"{start} → {end}" if end else start
+    if kind in ("created_time", "last_edited_time"):
+        return prop.get(kind) or ""
+    return value_text(prop)
 
 
 def _rich_text(text: str) -> list[dict]:

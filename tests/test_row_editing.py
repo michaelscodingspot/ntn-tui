@@ -46,6 +46,7 @@ class FakeNotion:
         self.queries = 0
         self.cursor = None  # set: the first batch of rows says there are more
         self.gate = None  # set: row queries wait for this event
+        self.write_gate = None  # set: row updates wait for this event
         self.fail = False
         for name in ("search", "get_schema", "list_view_ids", "query_rows", "update_row", "create_row", "trash", "restore"):
             monkeypatch.setattr(ntn, name, getattr(self, name))
@@ -71,6 +72,8 @@ class FakeNotion:
 
     async def update_row(self, row_id, properties):
         self.calls.append((row_id, properties))
+        if self.write_gate:
+            await self.write_gate.wait()
         self._check()
         target = next(r for r in self.rows if r["id"] == row_id)
         for name, value in properties.items():
@@ -285,6 +288,39 @@ def test_copy_a_cell(tmp_path, notion, key):
         assert app.is_running  # ctrl+c copies here, it doesn't ask to quit
         await go(app, pilot, "l", key)  # Status is empty: nothing copied
         assert copied == ["Beta"]
+
+    drive(tmp_path, script)
+
+
+def test_copy_gives_the_full_text_not_the_cut_cell(tmp_path, notion):
+    long = "שלום עולם " * 6 + "the end"
+    notion.rows[0] = row("a", long)  # longer than a cell, right-to-left words
+
+    async def script(app, pilot, grid):
+        copied = []
+        app.copy_to_clipboard = copied.append
+        await go(app, pilot, "enter", "y")
+        assert "…" in cell(grid, "a", "Name")  # the cell is cut short
+        assert copied == [long.strip()]
+
+    drive(tmp_path, script)
+
+
+def test_copy_waits_for_a_save(tmp_path, notion):
+    async def script(app, pilot, grid):
+        copied = []
+        app.copy_to_clipboard = copied.append
+        notion.write_gate = asyncio.Event()
+        await go(app, pilot, "enter", "enter", "2")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("y")  # the row shows … : the old value isn't copied
+        await pilot.pause()
+        assert copied == []
+        notion.write_gate.set()
+        await settle(app, pilot)
+        await go(app, pilot, "y")
+        assert copied == ["Alpha2"]
 
     drive(tmp_path, script)
 
