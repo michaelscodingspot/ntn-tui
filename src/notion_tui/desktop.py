@@ -4,7 +4,8 @@ GNOME on Wayland refuses focus requests from apps that aren't focused already, s
 opened from the terminal lands in a background window. The "Window Calls" GNOME Shell
 extension (window-calls@domandoman.xyz) exposes window listing and activation over D-Bus;
 when it is installed we use it to raise the window showing the page. Without it, the page
-still opens, just without focus.
+still opens, just without focus. The same call raises the kitty window herdr runs in, for a
+Claude session started from the app.
 
 A Notion page is found by its title. A web link's title isn't known in advance, so the
 browser window whose title changes (the new tab) or that appears after opening is raised.
@@ -97,6 +98,44 @@ async def raise_page_window(title: str) -> bool:
             return await _gdbus("Activate", str(match["id"])) is not None
         await asyncio.sleep(_POLL)
     return False
+
+
+def _parent_kitty(pid: int) -> int | None:
+    """The kitty process a process runs under, walking up its parents."""
+    while pid > 1:
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            return None
+        name, rest = stat[stat.index("(") + 1:stat.rindex(")")], stat[stat.rindex(")") + 2:].split()
+        if name == "kitty":
+            return pid
+        pid = int(rest[1])
+    return None
+
+
+def _herdr_kitty() -> int | None:
+    """The kitty window process showing herdr: the parent of a herdr client (not the server)."""
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            args = (proc / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if args and Path(args[0].decode(errors="replace")).name == "herdr" and b"server" not in args[1:]:
+            kitty = _parent_kitty(int(proc.name))
+            if kitty:
+                return kitty
+    return None
+
+
+async def raise_herdr_window() -> bool:
+    """Activate the kitty window herdr runs in."""
+    kitty = await asyncio.to_thread(_herdr_kitty)
+    windows = await _windows() if kitty else None
+    match = next((w for w in windows or [] if w.get("pid") == kitty), None)
+    return bool(match) and await _gdbus("Activate", str(match["id"])) is not None
 
 
 def _browser_class() -> str:

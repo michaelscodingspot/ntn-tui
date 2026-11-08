@@ -1,5 +1,5 @@
 """Modal dialogs: trash confirmation, options, new page, the database sort picker, the link picker,
-and the editors that open over a cell of the database grid."""
+the repo picker and prompt editor of a Claude session, and the editors that open over a cell of the database grid."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from textual.widgets import (
     RadioButton,
     RadioSet,
     SelectionList,
+    TextArea,
 )
 
 from . import narrow
@@ -411,6 +412,94 @@ class LinkPickScreen(ModalScreen[Link | None]):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         event.stop()
         self.dismiss(self.links[event.list_view.index or 0])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class RepoPickScreen(ModalScreen[str | None]):
+    """Choose the repo a Claude session runs in. Returns a label from `labels`, or the folder typed
+    for "other"."""
+
+    AUTO_FOCUS = "PickList"
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+    DEFAULT_CSS = """
+    RepoPickScreen { align: center middle; }
+    #repo { width: 60; height: auto; max-height: 80%; padding: 1 2; border: round $accent; background: $surface; }
+    #repo PickList { height: auto; max-height: 20; background: transparent; }
+    #repo ListItem { padding: 0 1; }
+    #repo Input { display: none; margin-top: 1; }
+    #repo .hint { color: $text-muted; margin-top: 1; }
+    """
+    OTHER = "other (specify)"
+
+    def __init__(self, labels: list[str]) -> None:
+        super().__init__()
+        self.labels = labels
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="repo"):
+            yield PickList(*(ListItem(Label(label)) for label in [*self.labels, self.OTHER]))
+            yield Input(placeholder="folder in /c/, or a full path")
+            yield Label("j/k move · enter choose · esc cancel", classes="hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#repo").border_title = "Run Claude in"
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        event.stop()
+        index = event.list_view.index or 0
+        if index < len(self.labels):
+            self.dismiss(self.labels[index])
+            return
+        box = self.query_one(Input)
+        box.display = True
+        box.focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        if event.value.strip():
+            self.dismiss(event.value.strip())
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class PromptEditScreen(ModalScreen[str | None]):
+    """Edit the prompt a Claude session starts with. Returns the edited text, or None on esc."""
+
+    AUTO_FOCUS = "TextArea"
+    BINDINGS = [
+        Binding("ctrl+s", "send", "send", priority=True),
+        Binding("escape", "cancel", "cancel", priority=True),
+    ]
+    DEFAULT_CSS = """
+    PromptEditScreen { align: center middle; }
+    #prompt { width: 90%; max-width: 110; height: 70%; padding: 1 2; border: round $accent; background: $surface; }
+    #prompt TextArea { height: 1fr; }
+    #prompt .hint { color: $text-muted; margin-top: 1; }
+    """
+
+    def __init__(self, prompt: str, where: str) -> None:
+        super().__init__()
+        self.prompt = prompt
+        self.where = where
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="prompt"):
+            yield TextArea(self.prompt, soft_wrap=True)
+            yield Label("ctrl+s send · esc cancel", classes="hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#prompt").border_title = f"Prompt for Claude in {self.where}"
+        self.query_one(TextArea).move_cursor(self.query_one(TextArea).document.end)
+
+    def action_send(self) -> None:
+        text = self.query_one(TextArea).text.strip()
+        if text:
+            self.dismiss(text)
+        else:
+            self.notify("The prompt is empty.", severity="warning")
 
     def action_cancel(self) -> None:
         self.dismiss(None)
