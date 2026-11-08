@@ -275,6 +275,20 @@ def test_edit_a_text_cell(tmp_path, notion):
     drive(tmp_path, script)
 
 
+@pytest.mark.parametrize("key", ["y", "ctrl+c"])
+def test_copy_a_cell(tmp_path, notion, key):
+    async def script(app, pilot, grid):
+        copied = []
+        app.copy_to_clipboard = copied.append
+        await go(app, pilot, "enter", "j", key)
+        assert copied == ["Beta"]
+        assert app.is_running  # ctrl+c copies here, it doesn't ask to quit
+        await go(app, pilot, "l", key)  # Status is empty: nothing copied
+        assert copied == ["Beta"]
+
+    drive(tmp_path, script)
+
+
 def test_unchanged_text_is_not_saved(tmp_path, notion):
     async def script(app, pilot, grid):
         await go(app, pilot, "enter", "enter", "enter")

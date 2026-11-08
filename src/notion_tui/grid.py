@@ -32,6 +32,7 @@ class RowGrid(DataTable):
         Binding("x", "app.row_trash", "delete row"),
         Binding("u", "app.row_restore", "undo delete"),
         Binding("e", "app.row_body", "row body"),
+        Binding("y,ctrl+c", "app.row_copy", "copy cell"),
     ]
 
     def __init__(self, **kwargs) -> None:

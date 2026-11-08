@@ -1035,6 +1035,19 @@ class NotionTUI(App):
         if found:
             self._edit_in_editor(ntn.row_page(found[1]))
 
+    def action_row_copy(self) -> None:
+        """Copy the full value of the cell under the grid's cursor to the clipboard."""
+        found, name = self._cursor_row(), self.query_one(RowGrid).current_name
+        if not found or name is None:
+            return
+        prop = found[1]["properties"].get(name)
+        text = ntn.value_text(prop) if prop else ""
+        if not text:
+            self.notify("The cell is empty.", severity="warning")
+            return
+        self.copy_to_clipboard(text)
+        self.notify(f"Copied {name.strip()}.", timeout=2)
+
     def _show_db_error(self, message: str) -> None:
         error = self.query_one("#dberror", Static)
         error.update(message)
