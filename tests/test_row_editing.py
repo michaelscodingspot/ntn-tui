@@ -509,3 +509,19 @@ def test_t_during_a_reload_leaves_the_old_rows_alone_and_the_reload_draws_it(tmp
         assert preview(app).startswith("| Name |")
 
     drive(tmp_path, script, edit=False)
+
+
+def test_a_long_title_fills_the_grid_width(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "enter")
+        app.screen.query_one(Input).value = "word " * 40
+        await go(app, pilot, "enter")
+        shown = cell(grid, "a", "Name")
+        room = grid.scrollable_content_region.width
+        assert shown.endswith("…") and len(shown) > 40
+        assert room - 4 <= grid.virtual_size.width <= room  # wide enough to fill it, never past it
+        await pilot.resize_terminal(160, 40)
+        await settle(app, pilot)
+        assert len(cell(grid, "a", "Name")) > len(shown)  # a wider grid shows more of it
+
+    drive(tmp_path, script)

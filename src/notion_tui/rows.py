@@ -8,7 +8,6 @@ from datetime import date, datetime
 
 from .ntn import value_text
 
-CELL_WIDTH = 40  # longest text a grid cell shows; the editor still has all of it
 _TEXT_LIMIT = 2000  # Notion's limit for one piece of rich text
 
 _EDITORS = {
@@ -43,8 +42,7 @@ def cell_text(prop: dict) -> str:
 
 
 def _one_line(text: str) -> str:
-    text = text.replace("\n", " ")
-    return text if len(text) <= CELL_WIDTH else text[: CELL_WIDTH - 1] + "…"
+    return text.replace("\n", " ")  # the grid cuts it to its column's width
 
 
 def edit_text(prop: dict) -> str:

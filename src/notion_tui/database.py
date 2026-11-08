@@ -106,6 +106,20 @@ def grid_columns(schema: list[dict], columns: list[str] | None) -> list[str]:
     return [c for c in columns if c in types and types[c] not in _UNRENDERED_TYPES]
 
 
+MIN_COLUMN_WIDTH = 8  # narrowest a cut grid column gets; past that the grid scrolls sideways
+
+
+def column_widths(natural: list[int], room: int) -> list[int]:
+    """Widths for grid columns sharing `room` cells: a column narrower than its fair share keeps its
+    width, and what it leaves goes to the wider ones, so one long column can fill the space."""
+    widths = list(natural)
+    left, count = room, len(natural)
+    for i in sorted(range(len(natural)), key=natural.__getitem__):
+        widths[i] = min(natural[i], max(left // count, MIN_COLUMN_WIDTH))
+        left, count = left - widths[i], count - 1
+    return widths
+
+
 def find_row(rows: list[dict], row_id: str | None) -> dict | None:
     return next((row for row in rows if row["id"] == row_id), None)
 

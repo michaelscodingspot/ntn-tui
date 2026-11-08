@@ -1,3 +1,4 @@
+from notion_tui import database
 from notion_tui.database import can_switch_layout, next_layout, rows_markdown, sort_label, trash_question, view_columns
 from notion_tui.ntn import View
 
@@ -55,3 +56,11 @@ def test_layouts_switch_only_on_list_and_table_views():
 def test_trash_question_warns_about_other_data_sources():
     assert trash_question("Books", 1) == "Move database “Books” and all its rows to the Notion trash?"
     assert "all 3 of its data sources" in trash_question("Books", 3)
+
+
+def test_column_widths_give_a_long_column_the_room_left():
+    assert database.column_widths([4, 200], 100) == [4, 96]
+    assert database.column_widths([10, 20], 100) == [10, 20]
+    assert database.column_widths([60, 60], 100) == [50, 50]
+    assert database.column_widths([30, 5, 30], 41) == [18, 5, 18]
+    assert database.column_widths([50, 50], 4) == [8, 8]
