@@ -83,9 +83,11 @@ class FakeNotion:
             target["properties"][name][kind] = new
         return copy.deepcopy(target)
 
-    async def create_row(self, data_source_id, title):
+    async def create_row(self, data_source_id, title, properties=None):
         self._check()
         new = row(f"new{len(self.rows)}", title)
+        for name, value in (properties or {}).items():
+            new["properties"][name] = {"type": "number", **value}
         self.rows.append(new)
         return copy.deepcopy(new)
 
@@ -419,6 +421,51 @@ def test_new_row(tmp_path, notion):
         await go(app, pilot, "G", "a", "m", "m", "a", "enter")
         assert grid.row_count == 3 and notion.rows[-1]["properties"]["Name"]["title"][0]["plain_text"] == "Gamma"
         assert grid.current_row_id == notion.rows[-1]["id"]
+
+    drive(tmp_path, script)
+
+
+def ids(grid):
+    return [grid.coordinate_to_cell_key((i, 0)).row_key.value for i in range(grid.row_count)]
+
+
+def test_insert_row_below_and_above(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "i")  # below Alpha, the first row
+        assert isinstance(app.screen, CellTextScreen) and grid.get_row_index("new-row") == 1
+        await go(app, pilot, "Z", "enter")
+        assert ids(grid) == ["a", "new2", "b"] and grid.current_row_id == "new2"
+        await go(app, pilot, "G", "I", "Y", "enter")  # above Beta, the last row
+        assert ids(grid) == ["a", "new2", "new3", "b"] and grid.current_row_id == "new3"
+        assert "_ord" not in notion.rows[-1]["properties"]  # no _ord column: nothing more is set
+
+    drive(tmp_path, script)
+
+
+def test_insert_row_cancelled(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "I", "escape")
+        assert ids(grid) == ["a", "b"] and len(notion.rows) == 2
+
+    drive(tmp_path, script)
+
+
+def test_insert_row_sets_ord_between_neighbours(tmp_path, notion, monkeypatch):
+    monkeypatch.setitem(globals(), "SCHEMA", [*SCHEMA, {"id": "ord", "name": "_ord", "type": "number", "options": []}])
+    for r, value in zip(notion.rows, (1, 2)):
+        r["properties"]["_ord"] = {"type": "number", "number": value}
+
+    def ord_of(row_id):
+        return next(r for r in notion.rows if r["id"] == row_id)["properties"]["_ord"]["number"]
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "i", "Z", "enter")  # between Alpha (1) and Beta (2)
+        assert ord_of("new2") == 1.5
+        await go(app, pilot, "g", "I", "Y", "enter")  # above the first row
+        assert ord_of("new3") == 0
+        await go(app, pilot, "G", "i", "X", "enter")  # below the last row
+        assert ord_of("new4") == 3
+        assert ids(grid) == ["new3", "a", "new2", "b", "new4"]
 
     drive(tmp_path, script)
 

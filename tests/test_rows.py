@@ -137,3 +137,17 @@ def test_edit_mode_column_is_added_to_old_caches(tmp_path):
     cache = Cache(path)
     assert not cache.db_edit_mode("ds")
     assert cache.db_state("ds") == ("v1", "", None)
+
+
+def test_order_column():
+    assert rows.order_column([{"name": "Name", "type": "title"}, {"name": "_ord", "type": "number"}]) == "_ord"
+    assert rows.order_column([{"name": "_ord", "type": "rich_text"}]) is None
+    assert rows.order_column([]) is None
+
+
+def test_order_between():
+    assert rows.order_between(1, 2, 1) == 1.5
+    assert rows.order_between(2, 1, -1) == 1.5
+    assert rows.order_between(5, None, 1) == 6
+    assert rows.order_between(5, None, -1) == 4
+    assert rows.order_between(None, 3, 1) is None

@@ -149,3 +149,22 @@ def check_option(name: str) -> str:
     if "," in name:
         raise ValueError("Option names can't contain a comma.")
     return name
+
+
+ORDER_NAME = "_ord"  # a number column that keeps a database's rows in a hand-made order
+
+
+def order_column(schema: list[dict]) -> str | None:
+    """The database's `_ord` number column, if it has one."""
+    return next((p["name"] for p in schema if p["name"].strip() == ORDER_NAME and p["type"] == "number"), None)
+
+
+def order_between(here: float | None, neighbour: float | None, step: int) -> float | None:
+    """The `_ord` for a row put next to one at `here`: halfway to its neighbour on that side, or one
+    step past it (step +1 after, -1 before) when there's no neighbour or the neighbour has no `_ord`.
+    None when the row it goes next to has no `_ord` itself."""
+    if here is None:
+        return None
+    if neighbour is None:
+        return here + step
+    return (here + neighbour) / 2

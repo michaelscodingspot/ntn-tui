@@ -204,6 +204,12 @@ def same_rows(a: list[Page], b: list[Page]) -> bool:
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+def _number(row: dict | None, name: str) -> float | None:
+    """A row's number property, None when it's empty or there's no row."""
+    prop = row["properties"].get(name) if row else None
+    return prop.get("number") if prop and prop.get("type") == "number" else None
+
+
 class NotionTUI(App):
     TITLE = "notion-tui"
     CSS = """
@@ -935,6 +941,31 @@ class NotionTUI(App):
         await self._render_page(page, markdown)
 
     def action_row_new(self) -> None:
+        self._start_new_row(None, None, {})
+
+    def action_row_insert(self, after: int) -> None:
+        """A new row right below (after=1) or above (after=0) the cursor's row. With an `_ord`
+        number column, its `_ord` goes halfway between that row and its neighbour on that side."""
+        found = self._cursor_row()
+        if not found:
+            self.action_row_new()  # no row to put it next to
+            return
+        rows, row = found
+        index = rows.rows.index(row)
+        extra = {}
+        name = row_edit.order_column(self.cache.schema(self.current.id) or [])
+        if name:
+            near = index + 1 if after else index - 1
+            neighbour = rows.rows[near] if 0 <= near < len(rows.rows) else None
+            value = row_edit.order_between(_number(row, name), _number(neighbour, name), 1 if after else -1)
+            if value is not None:
+                extra[name] = {"number": value}
+        grid = self.query_one(RowGrid)
+        self._start_new_row(grid.get_row_index(row["id"]) + after, (row["id"], after), extra)
+
+    def _start_new_row(self, index: int | None, anchor: tuple[str, int] | None, extra: dict) -> None:
+        """Open a row for a new title, at the bottom (index None) or at a grid row index. `anchor` is
+        the row it goes next to and whether after it; `extra` other property values to create it with."""
         grid, page = self.query_one(RowGrid), self.current
         schema = self.cache.schema(page.id) or []
         title = next((p["name"] for p in schema if p["type"] == "title"), None)
@@ -943,29 +974,29 @@ class NotionTUI(App):
         elif grid.has_row(NEW_ROW):
             self.notify("Still adding the last row.", severity="warning")
         else:
-            grid.add_new_row(title)
-            self.call_after_refresh(self._ask_new_title, page, title)
+            grid.add_new_row(title, index)
+            self.call_after_refresh(self._ask_new_title, page, title, anchor, extra)
 
-    def _ask_new_title(self, page: Page, title: str) -> None:
+    def _ask_new_title(self, page: Page, title: str, anchor: tuple[str, int] | None, extra: dict) -> None:
         grid = self.query_one(RowGrid)
 
         def done(text: str | None) -> None:
             if text:
                 grid.set_cell(NEW_ROW, title, text)
                 grid.mark(NEW_ROW, "…")
-                self._create_row(page, text)
+                self._create_row(page, text, anchor, extra)
             else:
                 grid.drop_row(NEW_ROW)
 
         self.push_screen(CellTextScreen("", grid.cell_region(), str.strip), done)
 
     @work(group="row-write")
-    async def _create_row(self, page: Page, title: str) -> None:
+    async def _create_row(self, page: Page, title: str, anchor: tuple[str, int] | None, extra: dict) -> None:
         grid = self.query_one(RowGrid)
         try:
             async with self._row_writes:
                 with self._busy():
-                    row = await ntn.create_row(page.id, title)
+                    row = await ntn.create_row(page.id, title, extra)
         except NtnError as err:
             grid.drop_row(NEW_ROW)
             self.notify(str(err), title="Could not add the row", severity="error")
@@ -975,7 +1006,11 @@ class NotionTUI(App):
             self.cache.invalidate(page.id)
             return
         grid.drop_row(NEW_ROW)
-        rows.rows.append(row)
+        near = find_row(rows.rows, anchor[0]) if anchor else None
+        if near:  # next to the row it was inserted at, if that is still there
+            rows.rows.insert(rows.rows.index(near) + anchor[1], row)
+        else:
+            rows.rows.append(row)
         self._learn_people(page.id, [row])
         await self._store_rows(page, rows)
         grid.select_row(row["id"])
