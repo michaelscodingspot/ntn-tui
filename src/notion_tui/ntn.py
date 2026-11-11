@@ -393,11 +393,6 @@ def row_title(row: dict) -> str:
     return _title(row)
 
 
-def row_page(row: dict) -> Page:
-    """A database row as a Page, for what works on pages (editing its body)."""
-    return _page(row)
-
-
 def run_interactive(*args: str) -> int:
     """Run ntn attached to the real terminal (it opens $EDITOR). Call while the TUI is suspended."""
     return subprocess.call([NTN, *args])

@@ -35,7 +35,6 @@ class RowGrid(DataTable):
         Binding("n", "app.row_new", "new row"),
         Binding("x", "app.row_trash", "delete row"),
         Binding("u", "app.row_restore", "undo delete"),
-        Binding("e", "app.row_body", "row body"),
         Binding("ctrl+o", "app.row_claude", "Claude task"),
         Binding("y,ctrl+c", "app.row_copy", "copy cell"),
     ]

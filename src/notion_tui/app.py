@@ -1045,11 +1045,6 @@ class NotionTUI(App):
             return
         self.notify(f"Restored “{ntn.row_title(row)}”.")
 
-    def action_row_body(self) -> None:
-        found = self._cursor_row()
-        if found:
-            self._edit_in_editor(ntn.row_page(found[1]))
-
     def action_row_claude(self) -> None:
         found, name = self._cursor_row(), self.query_one(RowGrid).current_name
         prop = found[1]["properties"].get(name) if found and name else None

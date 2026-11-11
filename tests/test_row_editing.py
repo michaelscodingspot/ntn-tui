@@ -190,6 +190,8 @@ def test_e_goes_into_edit_mode_and_the_grid(tmp_path, notion):
         assert grid.display and grid.has_focus and app.cache.db_edit_mode("ds")
         await go(app, pilot, "escape", "e")  # esc left Edit mode; e goes back in
         assert grid.display and grid.has_focus and app.cache.db_edit_mode("ds")
+        await go(app, pilot, "e")  # in the grid, e does nothing: no editor on a database
+        assert grid.display and grid.has_focus and not app._editing
 
     drive(tmp_path, script, edit=False)
 
