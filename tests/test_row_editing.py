@@ -667,3 +667,18 @@ def test_more_rows_than_fit_still_fill_the_width_without_scrolling_sideways(tmp_
         assert hebrew.startswith("…") and "שלום" in hebrew  # cut at its logical end, shown on the left
 
     drive(tmp_path, script)
+
+
+def test_r_requeries_the_rows_in_sort_order(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "e", "n")
+        await pilot.press(*"Gamma", "enter")
+        await settle(app, pilot)
+        assert list(grid.texts) == ["a", "b", "new2"]  # a new row shows last until Notion sorts it
+        notion.rows.insert(0, notion.rows.pop())  # its sort value puts it first
+        queries = notion.queries
+        await go(app, pilot, "r")
+        assert notion.queries > queries
+        assert list(grid.texts) == ["new2", "a", "b"]
+
+    drive(tmp_path, script)
