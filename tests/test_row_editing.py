@@ -423,6 +423,34 @@ def test_new_row(tmp_path, notion):
     drive(tmp_path, script)
 
 
+def test_r_requeries_the_rows_in_sort_order(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "e", "n", *"Gamma", "enter")
+        assert list(grid.texts) == ["a", "b", "new2"]  # a new row shows last until Notion sorts it
+        notion.rows.insert(0, notion.rows.pop())  # its sort value puts it first
+        queries = notion.queries
+        await go(app, pilot, "r")
+        assert notion.queries > queries
+        assert list(grid.texts) == ["new2", "a", "b"]
+
+    drive(tmp_path, script)
+
+
+def test_r_keeps_the_old_preview_until_the_fresh_rows_come(tmp_path, notion):
+    async def script(app, pilot, grid):
+        assert preview(app).startswith("- **Alpha**")
+        notion.gate = asyncio.Event()
+        notion.rows.reverse()
+        await pilot.press("r")
+        await pilot.pause(0.1)
+        assert preview(app).startswith("- **Alpha**") and "loading…" in info(app)
+        notion.gate.set()
+        await settle(app, pilot)
+        assert preview(app).startswith("- **Beta**")
+
+    drive(tmp_path, script, edit=False)
+
+
 def test_new_row_cancelled(tmp_path, notion):
     async def script(app, pilot, grid):
         await go(app, pilot, "enter", "n", "escape")
