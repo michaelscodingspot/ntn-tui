@@ -162,3 +162,20 @@ def test_order_moves_give_empty_values_numbers():
 def test_order_moves_descending():
     assert rows.order_moves([5, 3, 1], 0, 1, descending=True) == {0: 3, 1: 5}
     assert rows.order_moves([5, 3, 3], 1, 1, descending=True) == {2: 3, 1: 2}
+
+
+def test_order_column_and_sort():
+    column = {"id": "ord", "name": "_ord", "type": "number", "options": []}
+    assert rows.order_column([{"id": "t", "name": "Name", "type": "title"}, column]) is column
+    assert rows.order_column([{"id": "o", "name": "_ord", "type": "rich_text"}]) is None
+    assert rows.order_descending(column, [{"property": "ord", "direction": "ascending"}]) is False
+    assert rows.order_descending(column, [{"property": "ord", "direction": "descending"}]) is True
+    assert rows.order_descending(column, [{"property": "x", "direction": "ascending"}, {"property": "ord"}]) is None
+    assert rows.order_descending(column, None) is None
+
+
+def test_move_row_swaps_the_rows_and_returns_what_to_save():
+    listed = [{"id": i, "properties": {"_ord": {"type": "number", "number": n}}} for i, n in (("a", 1), ("b", 2), ("c", 3))]
+    assert rows.move_row(listed, 2, -1, False) == [("c", 2), ("b", 3)]
+    assert [(r["id"], r["properties"]["_ord"]["number"]) for r in listed] == [("a", 1), ("c", 2), ("b", 3)]
+    assert rows.move_row(listed, 0, -1, False) is None

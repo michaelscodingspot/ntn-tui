@@ -131,15 +131,17 @@ sends, `esc` cancels), and starts Claude Code in herdr with it:
 Claude asks whether to trust a new worktree folder; herdr's kitty window comes forward to answer
 it, and the task is sent once Claude is ready.
 
+Each change is saved to Notion at once: `…` in the row's gutter while saving, `✓` when done.
+If Notion refuses, the old value comes back with a message. A row changed so it no longer
+fits the filter or sort stays where it is until `r`; new rows go at the bottom until then.
+
 `alt+j` / `alt+k` reorder rows in a database with a number column named `_ord`, when the rows are
 sorted by `_ord` first (ascending or descending). The row and its neighbour swap `_ord` values; when
 the two are equal or empty, they get new values that keep them in the new order (an equal pair: the
 lower one between its neighbours' values; an empty one: the last value + 1). The cursor stays on the
-moved row. A failed save brings back Notion's order.
-
-Each change is saved to Notion at once: `…` in the row's gutter while saving, `✓` when done.
-If Notion refuses, the old value comes back with a message. A row changed so it no longer
-fits the filter or sort stays where it is until `r`; new rows go at the bottom until then.
+moved row. A failed save brings back Notion's order, and moves made after it aren't sent.
+The new values look only at the rows shown: with more rows to load (`m`) or a filter on, a row
+given a new value next to an equal or empty one may land elsewhere after `r`.
 
 | Property                               | Editor                                     |
 |----------------------------------------|--------------------------------------------|
