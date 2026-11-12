@@ -33,8 +33,8 @@ class RowGrid(DataTable):
         Binding("enter", "select_cursor", "edit cell"),
         Binding("space", "select_cursor", "edit cell", show=False),
         Binding("n", "app.row_new", "new row"),
-        Binding("i", "app.row_insert(1)", "insert row below"),
-        Binding("I", "app.row_insert(0)", "insert row above"),
+        Binding("i", "app.row_insert(True)", "insert row below"),
+        Binding("I", "app.row_insert(False)", "insert row above"),
         Binding("x", "app.row_trash", "delete row"),
         Binding("u", "app.row_restore", "undo delete"),
         Binding("e", "app.row_body", "row body"),
@@ -169,7 +169,7 @@ class RowGrid(DataTable):
             self.add_row(*self._cells(NEW_ROW), key=NEW_ROW, label=" ")
         else:  # a DataTable only appends: rebuild with the new row in its place
             items = list(self.texts.items())
-            items.insert(max(index, 0), (NEW_ROW, blank))
+            items.insert(index, (NEW_ROW, blank))
             self.texts = dict(items)
             self._draw()
         self.move_cursor(row=self.get_row_index(NEW_ROW), column=self.names.index(name), animate=False)

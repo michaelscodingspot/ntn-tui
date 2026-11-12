@@ -159,12 +159,22 @@ def order_column(schema: list[dict]) -> str | None:
     return next((p["name"] for p in schema if p["name"].strip() == ORDER_NAME and p["type"] == "number"), None)
 
 
-def order_between(here: float | None, neighbour: float | None, step: int) -> float | None:
-    """The `_ord` for a row put next to one at `here`: halfway to its neighbour on that side, or one
-    step past it (step +1 after, -1 before) when there's no neighbour or the neighbour has no `_ord`.
-    None when the row it goes next to has no `_ord` itself."""
+def _number(row: dict, name: str) -> float | None:
+    prop = row["properties"].get(name) or {}
+    return prop.get("number") if prop.get("type") == "number" else None
+
+
+def new_order(rows: list[dict], index: int, after: bool, name: str) -> float | None:
+    """The `_ord` (column `name`) for a row put right after / before rows[index]: halfway to its
+    neighbour on that side, or one past it when there's no neighbour, the neighbour has no `_ord`,
+    or its `_ord` isn't on that side (the rows aren't shown in `_ord` order). None when rows[index]
+    has no `_ord` itself."""
+    here = _number(rows[index], name)
     if here is None:
         return None
-    if neighbour is None:
+    step = 1 if after else -1
+    near = index + step
+    there = _number(rows[near], name) if 0 <= near < len(rows) else None
+    if there is None or (there - here) * step <= 0:
         return here + step
-    return (here + neighbour) / 2
+    return (here + there) / 2

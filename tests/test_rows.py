@@ -145,9 +145,16 @@ def test_order_column():
     assert rows.order_column([]) is None
 
 
-def test_order_between():
-    assert rows.order_between(1, 2, 1) == 1.5
-    assert rows.order_between(2, 1, -1) == 1.5
-    assert rows.order_between(5, None, 1) == 6
-    assert rows.order_between(5, None, -1) == 4
-    assert rows.order_between(None, 3, 1) is None
+def test_new_order():
+    def ords(*values):
+        return [{"properties": {"_ord": {"type": "number", "number": v}}} for v in values]
+
+    assert rows.new_order(ords(1, 2), 0, True, "_ord") == 1.5
+    assert rows.new_order(ords(1, 2), 1, False, "_ord") == 1.5
+    assert rows.new_order(ords(1, 2), 1, True, "_ord") == 3  # last row
+    assert rows.new_order(ords(1, 2), 0, False, "_ord") == 0  # first row
+    assert rows.new_order(ords(1, None), 0, True, "_ord") == 2  # neighbour without _ord
+    assert rows.new_order(ords(None, 2), 0, True, "_ord") is None  # cursor row without _ord
+    assert rows.new_order(ords(5, 1), 0, True, "_ord") == 6  # not shown in _ord order
+    assert rows.new_order(ords(3, 3), 0, True, "_ord") == 4  # a tie: halfway would be a tie too
+    assert rows.new_order([{"properties": {}}], 0, True, "_ord") is None
