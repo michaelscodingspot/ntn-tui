@@ -237,7 +237,7 @@ class NotionTUI(App):
 
     BINDINGS = [
         Binding("slash", "focus_search", "search"),
-        Binding("w", "switch_pane", "list/preview"),
+        Binding("w", "switch_pane", "switch pane"),
         Binding("v", "db_edit_mode", "view/edit rows"),
         Binding("t", "db_layout", "list/table"),
         Binding("e", "edit", "edit"),
@@ -463,7 +463,7 @@ class NotionTUI(App):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         self.screen.add_class("full")
-        self.query_one(RowGrid if self._editing_rows() else PreviewScroll).focus()
+        self._focus_preview()
 
     # ---------- search ----------
 
@@ -800,6 +800,16 @@ class NotionTUI(App):
     def _after_grid(self) -> Widget:
         """What takes the focus when the grid goes away."""
         return self.query_one(PreviewScroll if self.screen.has_class("full") else PageList)
+
+    def _focus_preview(self) -> None:
+        """Focus the preview side: the grid when it is showing, otherwise the Markdown preview."""
+        grid = self.query_one(RowGrid)
+        (grid if grid.display else self.query_one(PreviewScroll)).focus()
+
+    def _focus_list(self) -> None:
+        """Show the list pane again (leaving full width) and focus the page list."""
+        self.screen.remove_class("full")
+        self.query_one(PageList).focus()
 
     def action_focus_grid(self) -> None:
         self.query_one(RowGrid).focus()
@@ -1253,10 +1263,9 @@ class NotionTUI(App):
     def action_switch_pane(self) -> None:
         """Move the focus between the page list and the preview, never to the search box (unlike tab)."""
         if self.query_one(PageList).has_focus:
-            self.query_one(RowGrid if self._editing_rows() else PreviewScroll).focus()
+            self._focus_preview()
         else:
-            self.screen.remove_class("full")
-            self.query_one(PageList).focus()
+            self._focus_list()
 
     def action_back(self) -> None:
         if self.query_one("#dbquery", Input).has_focus:
@@ -1270,8 +1279,7 @@ class NotionTUI(App):
         if search.has_focus and search.value:
             search.value = ""
             return
-        self.screen.remove_class("full")
-        self.query_one(PageList).focus()
+        self._focus_list()
 
     def action_refresh(self) -> None:
         self.next_cursor = None
