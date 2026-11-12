@@ -237,6 +237,7 @@ class NotionTUI(App):
 
     BINDINGS = [
         Binding("slash", "focus_search", "search"),
+        Binding("w", "switch_pane", "list/preview"),
         Binding("v", "db_edit_mode", "view/edit rows"),
         Binding("t", "db_layout", "list/table"),
         Binding("e", "edit", "edit"),
@@ -1248,6 +1249,14 @@ class NotionTUI(App):
     def action_focus_search(self) -> None:
         self.screen.remove_class("full")
         self.query_one("#search", Input).focus()
+
+    def action_switch_pane(self) -> None:
+        """Move the focus between the page list and the preview, never to the search box (unlike tab)."""
+        if self.query_one(PageList).has_focus:
+            self.query_one(RowGrid if self._editing_rows() else PreviewScroll).focus()
+        else:
+            self.screen.remove_class("full")
+            self.query_one(PageList).focus()
 
     def action_back(self) -> None:
         if self.query_one("#dbquery", Input).has_focus:
