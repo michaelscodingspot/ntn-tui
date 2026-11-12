@@ -113,6 +113,7 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | `i` / `I`           | new row right below / above the cursor's row (`_ord` below) |
 | `x`                 | delete the row, to Notion's trash, without asking   |
 | `u`                 | bring back the last deleted row (several in a row work) |
+| `alt+j` / `alt+k`, `alt+↓` / `alt+↑` | move the row down / up (databases with an `_ord` column, below) |
 | `e`                 | edit the row's body in `$EDITOR`                    |
 | `ctrl+o`            | Claude Code session on the cell in herdr (below)    |
 | `y` / `ctrl+c`      | copy the cell's full value to the clipboard         |
@@ -145,6 +146,14 @@ it is one more / one less. `n`, and `i` below a row with no `_ord`, give the new
 rows inserted between later; 8 when no row has an `_ord`. `I` above a row with no `_ord` leaves
 it empty. `i` on the last loaded row while more rows wait asks for `m` first: the next row's
 `_ord` isn't known.
+
+`alt+j` / `alt+k` reorder rows in a database with a number column named `_ord`, when the rows are
+sorted by `_ord` first (ascending or descending). The row and its neighbour swap `_ord` values; when
+the two are equal or empty, they get new values that keep them in the new order (an equal pair: the
+lower one between its neighbours' values; an empty one: the last value + 1). The cursor stays on the
+moved row. A failed save brings back Notion's order, and moves made after it aren't sent.
+The new values look only at the rows shown: with more rows to load (`m`) or a filter on, a row
+given a new value next to an equal or empty one may land elsewhere after `r`.
 
 | Property                               | Editor                                     |
 |----------------------------------------|--------------------------------------------|

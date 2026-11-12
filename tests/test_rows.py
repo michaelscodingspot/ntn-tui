@@ -176,3 +176,43 @@ def test_insert_order():
     assert rows.insert_order(ords(1, 2), 0, False, "_ord", True) == 0  # above: loaded neighbours enough
     assert rows.insert_order(ords(None, 2), 0, True, "_ord", True) is rows.Order.LAST  # below a row without _ord
     assert rows.insert_order(ords(None, 2), 0, False, "_ord", False) is None  # above one: left empty
+
+
+def test_order_moves_swap_two_values():
+    assert rows.order_moves([1, 2, 3.5], 1, 1) == {1: 3.5, 2: 2}
+    assert rows.order_moves([1, 2, 3.5], 1, -1) == {0: 2, 1: 1}
+
+
+def test_order_moves_stop_at_the_edges():
+    assert rows.order_moves([1, 2], 0, -1) is None
+    assert rows.order_moves([1, 2], 1, 1) is None
+
+
+def test_order_moves_split_equal_values():
+    assert rows.order_moves([1, 3, 3, 4], 1, 1) == {2: 3, 1: 3.5}  # the lower row goes on top, the other between 3 and 4
+    assert rows.order_moves([3, 3], 0, 1) == {1: 3, 0: 4}
+
+
+def test_order_moves_give_empty_values_numbers():
+    assert rows.order_moves([1, 5, None], 1, 1) == {2: 5, 1: 6}  # empty sorts last
+    assert rows.order_moves([1, 5, None, None], 3, -1) == {3: 6, 2: 7}
+
+
+def test_order_moves_descending():
+    assert rows.order_moves([5, 3, 1], 0, 1, descending=True) == {0: 3, 1: 5}
+    assert rows.order_moves([5, 3, 3], 1, 1, descending=True) == {2: 3, 1: 2}
+
+
+def test_order_descending():
+    schema = [{"id": "ord", "name": "_ord", "type": "number", "options": []}]
+    assert rows.order_descending(schema, "_ord", [{"property": "ord", "direction": "ascending"}]) is False
+    assert rows.order_descending(schema, "_ord", [{"property": "ord", "direction": "descending"}]) is True
+    assert rows.order_descending(schema, "_ord", [{"property": "x", "direction": "ascending"}, {"property": "ord"}]) is None
+    assert rows.order_descending(schema, "_ord", None) is None
+
+
+def test_move_row_swaps_the_rows_and_returns_what_to_save():
+    listed = [{"id": i, "properties": {"_ord": {"type": "number", "number": n}}} for i, n in (("a", 1), ("b", 2), ("c", 3))]
+    assert rows.move_row(listed, 2, -1, False, "_ord") == [("c", 2), ("b", 3)]
+    assert [(r["id"], r["properties"]["_ord"]["number"]) for r in listed] == [("a", 1), ("c", 2), ("b", 3)]
+    assert rows.move_row(listed, 0, -1, False, "_ord") is None

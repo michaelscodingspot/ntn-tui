@@ -41,6 +41,7 @@ def row(id, name):
 class FakeNotion:
     def __init__(self, monkeypatch):
         self.rows = [row("a", "Alpha"), row("b", "Beta")]
+        self.schema = SCHEMA
         self.trashed = {}
         self.calls = []
         self.queries = 0
@@ -119,11 +120,11 @@ def notion(monkeypatch):
     return FakeNotion(monkeypatch)
 
 
-def drive(tmp_path, script, edit=True, schema=SCHEMA):
+def drive(tmp_path, script, edit=True, schema=SCHEMA, views=VIEWS):
     async def run():
         cache = Cache(tmp_path / "c.db")
         cache.put_schema("ds", schema)
-        cache.put_views("ds", VIEWS)
+        cache.put_views("ds", views)
         cache.upsert_pages([DB])
         cache.put_db_edit_mode("ds", edit)
         app = NotionTUI(cache, Options())
@@ -653,6 +654,93 @@ def test_delete_every_row_then_add(tmp_path, notion):
         assert grid.row_count == 1
 
     drive(tmp_path, script)
+
+
+def drive_ordered(tmp_path, notion, script, values, direction="ascending"):
+    """Rows a, b, c, … with these `_ord` values, as Notion lists them sorted by `_ord` (None: sorted by nothing)."""
+    notion.schema = ORD_SCHEMA
+    notion.rows = [row("abcdefgh"[i], f"Row {i}") for i in range(len(values))]
+    for r, value in zip(notion.rows, values):
+        r["properties"]["_ord"] = {"type": "number", "number": value}
+    sorts = [{"property": "ord", "direction": direction}] if direction else None
+    drive(tmp_path, script, schema=ORD_SCHEMA, views=[View("v1", "Shelf", "list", None, sorts, None)])
+
+
+def order_of(app):
+    return [(r["id"], r["properties"]["_ord"]["number"]) for r in app.db_rows.rows]
+
+
+@pytest.mark.parametrize("down, up", [("alt+j", "alt+k"), ("alt+down", "alt+up")])
+def test_alt_keys_move_a_row_and_the_cursor_stays_on_it(tmp_path, notion, down, up):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", down)
+        assert list(grid.texts) == ["b", "a", "c"] and grid.current_row_id == "a"
+        assert order_of(app) == [("b", 1), ("a", 2), ("c", 3)]
+        assert sorted(notion.calls) == [("a", {"_ord": {"number": 2}}), ("b", {"_ord": {"number": 1}})]
+        await go(app, pilot, down, up)
+        assert list(grid.texts) == ["b", "a", "c"] and grid.current_row_id == "a"
+        assert app.cache.content("ds")[0].index("Row 1") < app.cache.content("ds")[0].index("Row 0")
+
+    drive_ordered(tmp_path, notion, script, [1, 2, 3])
+
+
+def test_moving_up_from_the_top_row_does_nothing(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "alt+k")
+        assert list(grid.texts) == ["a", "b"] and notion.calls == []
+
+    drive_ordered(tmp_path, notion, script, [1, 2])
+
+
+def test_moving_past_an_empty_order_numbers_both_rows(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "alt+j")
+        assert order_of(app) == [("b", 1), ("a", 2)] and grid.current_row_id == "a"
+
+    drive_ordered(tmp_path, notion, script, [1, None])
+
+
+def test_moving_in_a_descending_order(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "alt+j")
+        assert order_of(app) == [("b", 5), ("a", 4)] and grid.current_row_id == "a"
+
+    drive_ordered(tmp_path, notion, script, [5, 5], direction="descending")
+
+
+def test_rows_not_sorted_by_order_stay_put(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "alt+j")
+        assert list(grid.texts) == ["a", "b"] and notion.calls == []
+
+    drive_ordered(tmp_path, notion, script, [1, 2], direction=None)
+
+
+def test_a_cell_save_landing_after_a_move_keeps_the_new_order(tmp_path, notion):
+    async def script(app, pilot, grid):
+        notion.write_gate = asyncio.Event()
+        await pilot.press("enter", "enter", "2", "enter", "alt+j")  # the title save is still on its way
+        await pilot.pause()
+        notion.write_gate.set()
+        await settle(app, pilot)
+        assert order_of(app) == [("b", 1), ("a", 2)] and cell(grid, "a", "_ord") == "2"
+
+    drive_ordered(tmp_path, notion, script, [1, 2])
+
+
+def test_failed_move_brings_back_notions_order_and_drops_the_moves_after_it(tmp_path, notion):
+    async def script(app, pilot, grid):
+        notion.fail = True
+        notion.write_gate = asyncio.Event()
+        await pilot.press("enter", "alt+j", "alt+j")
+        await pilot.pause()
+        notion.write_gate.set()
+        await settle(app, pilot)
+        await settle(app, pilot)
+        assert list(grid.texts) == ["a", "b", "c"] and str(grid.rows["a"].label) == " "
+        assert len(notion.calls) == 2  # only the first move was sent
+
+    drive_ordered(tmp_path, notion, script, [1, 2, 3])
 
 
 def test_filter_from_the_grid_returns_to_the_grid(tmp_path, notion):

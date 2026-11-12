@@ -99,7 +99,7 @@ def _number_value(text: str) -> int | float | None:
         raise ValueError(f"“{text}” isn't a number.") from None
     if not math.isfinite(number):
         raise ValueError(f"“{text}” isn't a number.")
-    return int(number) if number.is_integer() else number
+    return _whole_as_int(number)
 
 
 def parse_text(kind: str, text: str) -> tuple[dict, str]:
@@ -205,3 +205,50 @@ def insert_order(rows: list[dict], index: int, after: bool, name: str, more: boo
     if after and index == len(rows) - 1 and more:
         return Order.NEEDS_MORE
     return value
+
+
+def order_descending(schema: list[dict], name: str, sorts: list | None) -> bool | None:
+    """Whether rows sorted by `sorts` go down the `_ord` column `name` (True) or up (False); None = not
+    sorted by it first."""
+    first = (sorts or [None])[0]
+    column = next((p for p in schema if p["name"] == name), None)
+    if not first or not column or first.get("property") != column["id"]:
+        return None
+    return first.get("direction") == "descending"
+
+
+def _whole_as_int(number: float) -> int | float:
+    return int(number) if float(number).is_integer() else number
+
+
+def order_moves(values: list[float | None], index: int, step: int, descending: bool = False) -> dict[int, int | float] | None:
+    """New order values ({row index before the move: value}) that move the row at `index` one place up
+    (step -1) or down (step 1), in rows sorted by those values; None at the edge. Two different values
+    swap; equal or empty ones (empty sorts last) get values that put the pair in the new order."""
+    other = index + step
+    if not 0 <= other < len(values):
+        return None
+    if descending:  # mirrored: work on the negated values, which go up as the rows go down
+        moves = order_moves([None if v is None else -v for v in values], index, step)
+        return {i: _whole_as_int(-v) for i, v in moves.items()}
+    top, bottom = min(index, other), max(index, other)
+    above, below = values[top], values[bottom]
+    if above is not None and below is not None and above != below:
+        return {top: _whole_as_int(below), bottom: _whole_as_int(above)}
+    known = [v for v in (above, below) if v is not None]
+    first = known[0] if known else max((v for v in values[:top] if v is not None), default=0) + 1
+    after = next((v for v in values[bottom + 1:] if v is not None and v > first), None)
+    second = (first + after) / 2 if after is not None else first + 1
+    return {bottom: _whole_as_int(first), top: _whole_as_int(second)}  # the lower row goes on top
+
+
+def move_row(rows: list[dict], index: int, step: int, descending: bool, name: str) -> list[tuple[str, int | float]] | None:
+    """Move the row at `index` one place by giving it and its neighbour new values in the `_ord` column
+    `name`, in place; returns the (row ID, value) pairs to save, or None at the edge."""
+    moves = order_moves([_number(row, name) for row in rows], index, step, descending)
+    if moves is None:
+        return None
+    for i, value in moves.items():
+        rows[i]["properties"][name]["number"] = value
+    rows[index], rows[index + step] = rows[index + step], rows[index]
+    return [(rows[i]["id"], value) for i, value in ((index + step, moves[index]), (index, moves[index + step]))]

@@ -14,6 +14,7 @@ from .database import column_widths
 from .rows import cell_text
 
 NEW_ROW = "new-row"  # key of the row shown while its title is typed and sent
+SAVED_MARK_SECONDS = 1.5  # how long a row shows ✓ after a save
 
 
 def _cell(text: str, width: int | None) -> Text:
@@ -37,6 +38,8 @@ class RowGrid(DataTable):
         Binding("I", "app.row_insert(False)", "insert row above"),
         Binding("x", "app.row_trash", "delete row"),
         Binding("u", "app.row_restore", "undo delete"),
+        Binding("alt+k,alt+up", "app.row_move(-1)", "move row up", key_display="alt+↑"),
+        Binding("alt+j,alt+down", "app.row_move(1)", "move row down", key_display="alt+↓"),
         Binding("e", "app.row_body", "row body"),
         Binding("ctrl+o", "app.row_claude", "Claude task"),
         Binding("y,ctrl+c", "app.row_copy", "copy cell"),
@@ -145,6 +148,24 @@ class RowGrid(DataTable):
             self.rows[row_id].label = Text(mark)
             self._clear_caches()
             self.refresh()
+
+    def mark_saved(self, row_id: str) -> None:
+        """✓ in the row's gutter for a moment."""
+        self.mark(row_id, "✓")
+        self.set_timer(SAVED_MARK_SECONDS, lambda: self.mark(row_id, " "))
+
+    def swap_rows(self, first: dict, second: dict) -> None:
+        """Swap two rows the app swapped in its rows list, with their changed values; the cursor stays on its row."""
+        if not (self.has_row(first["id"]) and self.has_row(second["id"])):
+            return
+        keys = list(self.texts)
+        i, j = keys.index(first["id"]), keys.index(second["id"])
+        keys[i], keys[j] = keys[j], keys[i]
+        self.texts = {key: self.texts[key] for key in keys}
+        for row in (first, second):
+            self.texts[row["id"]] = self._texts(row)
+        self._fit()
+        self._draw()
 
     def saving(self, row_id: str) -> bool:
         return self.has_row(row_id) and str(self.rows[row_id].label) == "…"

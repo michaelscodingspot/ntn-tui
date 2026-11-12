@@ -63,7 +63,6 @@ SEARCH_DEBOUNCE = 0.4  # seconds to wait after typing stops before asking Notion
 LOAD_MORE_MARGIN = 5  # fetch the next batch when the cursor is this close to the end
 BODY_CHECKS = 2  # parallel ntn calls when checking which database entries have content
 VIEW_FETCHES = 2  # parallel ntn calls when fetching a database's views
-SAVED_MARK_SECONDS = 1.5  # how long a grid row shows ✓ after a save
 WATCH_SECONDS = 60  # how often the focused page is checked for changes made elsewhere
 RECENT_EDIT = timedelta(minutes=2)  # Notion's edit time has minute steps: content edited this recently is compared too
 # Work that changes the focused page here, or a fetch of it already on its way: the check waits for the next minute.
@@ -302,6 +301,9 @@ class NotionTUI(App):
         self._search_timer: Timer | None = None
         self.db_rows: DbRows | None = None  # rows of the database being previewed
         self._row_writes = asyncio.Lock()  # row changes reach Notion one at a time, in the order made
+        self._moves = 0  # alt+j / alt+k presses so far, numbering their `_ord` saves
+        self._moves_dropped = 0  # saves of moves up to this number are skipped: an earlier one failed
+        self._last_move: dict[str, int] = {}  # row → the last move whose save sets its ✓
         self._trashed: dict[str, list[tuple[dict, int]]] = {}  # data source → rows deleted here and where they were
         self._query_from_grid = False  # the filter line was opened from the grid: go back there
         self._layouts: dict[str, str] = {}  # view → layout picked with `t`; not saved, gone at quit
@@ -1024,10 +1026,13 @@ class NotionTUI(App):
         if rows is None:
             self.cache.invalidate(page.id)  # moved on: the cached table is out of date
             return
+        old = find_row(rows.rows, row_id)
+        order = self._order_column()
+        if old and order and name != order and order in old["properties"]:
+            fresh["properties"][order] = old["properties"][order]  # a move made meanwhile
         replace_row(rows.rows, fresh)
         grid.redraw_row(fresh)
-        grid.mark(row_id, "✓")
-        self.set_timer(SAVED_MARK_SECONDS, lambda: grid.mark(row_id, " "))
+        grid.mark_saved(row_id)
         await self._store_rows(page, rows)
 
     def _rows_of(self, page: Page) -> DbRows | None:
@@ -1183,6 +1188,62 @@ class NotionTUI(App):
             return
         self.notify(f"Restored “{ntn.row_title(row)}”.")
 
+    async def action_row_move(self, step: int) -> None:
+        """Move the row under the cursor one place up or down by changing `_ord`; the cursor goes with it."""
+        found, name, grid = self._cursor_row(), self._order_column(), self.query_one(RowGrid)
+        if not found or name is None or found[0].reloading:
+            return
+        if grid.has_row(NEW_ROW):
+            self.notify("Still adding the last row.", severity="warning")
+            return
+        rows, row = found
+        descending = row_edit.order_descending(self.cache.schema(self.current.id) or [], name, rows.sorts)  # the sort these rows came in
+        if descending is None:
+            self.notify(f"Moving rows works when they are sorted by {row_edit.ORDER_NAME} first.", severity="warning")
+            return
+        index = rows.rows.index(row)
+        changes = row_edit.move_row(rows.rows, index, step, descending, name)
+        if changes is None:
+            return
+        grid.swap_rows(rows.rows[index], rows.rows[index + step])
+        self._moves += 1
+        for row_id, _ in changes:
+            self._last_move[row_id] = self._moves
+            grid.mark(row_id, "…")
+        self._write_order(self.current, name, changes, self._moves)
+        await self._store_rows(self.current, rows)
+
+    @work(group="row-write")
+    async def _write_order(self, page: Page, name: str, changes: list[tuple[str, int | float]], move: int) -> None:
+        """Save a move's new `_ord` values. The rows keep the values set at the press, not Notion's
+        reply: a later move may have changed them again already."""
+        grid = self.query_one(RowGrid)
+        async with self._row_writes:
+            if move <= self._moves_dropped:
+                return  # an earlier move failed: the reload shows Notion's order instead
+            try:
+                with self._busy():
+                    await asyncio.gather(*(ntn.update_row(row_id, {name: {"number": value}}) for row_id, value in changes))
+            except NtnError as err:
+                self._moves_dropped = self._moves
+                for row_id in self._last_move:
+                    grid.mark(row_id, " ")
+                self._last_move.clear()
+                self.notify(str(err), title="Could not move the row", severity="error")
+                if self._rows_of(page):
+                    self._reload_db()
+                else:
+                    self.cache.invalidate(page.id)
+                return
+        done = [row_id for row_id, _ in changes if self._last_move.get(row_id) == move]
+        for row_id in done:
+            del self._last_move[row_id]  # a later move's save sets the ✓ of the others
+        if self._rows_of(page) is None:
+            self.cache.invalidate(page.id)
+            return
+        for row_id in done:
+            grid.mark_saved(row_id)
+
     def action_row_body(self) -> None:
         found = self._cursor_row()
         if found:
@@ -1248,6 +1309,8 @@ class NotionTUI(App):
                 return bool(rows and rows.cursor)
             if action == "db_layout":
                 return can_switch_layout(self._db_request(self.current.id).view) and not self._editing_rows()
+        if action == "row_move":
+            return self._is_db() and self._order_column() is not None
         if action == "focus_grid":
             return self._is_db() and self.query_one(RowGrid).display
         if action == "links":
