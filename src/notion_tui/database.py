@@ -179,6 +179,12 @@ class DbRows:
     filter: dict | None = None  # what page 1 was queried with; later pages must ask the same
     sorts: list | None = None
     reloading: bool = False  # a new query is on its way: these rows are about to be replaced
+    failed: bool = False  # Notion refused the query: no rows, only the error
+
+
+def rows_key(rows: list[dict]) -> list[tuple]:
+    """What a change to rows shows in: order, edit time and values (two edits in one minute share an edit time)."""
+    return [(r.get("id"), r.get("last_edited_time"), r.get("properties")) for r in rows]
 
 
 def people_names(rows: list[dict]) -> dict[str, str]:

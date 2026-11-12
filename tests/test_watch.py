@@ -3,10 +3,11 @@
 import asyncio
 
 import pytest
+from textual.screen import ModalScreen
 from textual.widgets import Markdown
 
 from notion_tui import ntn
-from notion_tui.app import NotionTUI
+from notion_tui.app import Breadcrumb, NotionTUI, PageItem, TitleLabel
 from notion_tui.cache import Cache
 from notion_tui.ntn import Page
 from notion_tui.options import Options
@@ -85,13 +86,24 @@ def test_an_unchanged_page_is_not_read_again(tmp_path, notion):
 
 def test_no_check_while_a_dialog_is_open(tmp_path, notion):
     async def script(app, pilot):
-        from textual.screen import ModalScreen
-
         await app.push_screen(ModalScreen())
         notion.page = Page("p", "Notes", NEW, "", "workspace", "")
         notion.body = "second text"
         app._watch_current()
         await settle(app, pilot)
         assert "first text" in preview(app)
+
+    drive(tmp_path, script)
+
+
+def test_a_page_renamed_elsewhere_shows_its_new_title(tmp_path, notion):
+    async def script(app, pilot):
+        notion.page = Page("p", "Journal", NEW, "", "workspace", "")
+        app._watch_current()
+        await settle(app, pilot)
+        assert app.current.title == "Journal"
+        assert app.query_one(Breadcrumb).parts[-1] == "Journal"
+        assert str(app.query_one(PageItem).query_one(TitleLabel).content) == "Journal"
+        assert app.cache.find_page("p").title == "Journal"
 
     drive(tmp_path, script)

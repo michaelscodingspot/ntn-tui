@@ -23,6 +23,7 @@ from . import claude, desktop, editor, narrow, ntn, query, rows as row_edit
 from .bidi import BidiMarkdown, BidiMixin
 from .cache import MAX_DEPTH, Cache
 from .database import (
+    rows_key,
     SKIPPED_VIEW_TYPES,
     DbRequest,
     DbRows,
@@ -208,18 +209,8 @@ def same_rows(a: list[Page], b: list[Page]) -> bool:
 
 def edited_recently(last_edited: str, now: datetime) -> bool:
     """True when the edit time is so close to now that a later edit in the same minute would not move it."""
-    try:
-        edited = datetime.fromisoformat(last_edited)
-    except ValueError:
-        return True  # unknown: compare the content
-    if edited.tzinfo is None:
-        edited = edited.replace(tzinfo=timezone.utc)
-    return now - edited < RECENT_EDIT
-
-
-def rows_key(rows: list[dict]) -> list[tuple]:
-    """What a change to rows shows in: order, edit time and values (two edits in one minute share an edit time)."""
-    return [(r.get("id"), r.get("last_edited_time"), r.get("properties")) for r in rows]
+    edited = _local(last_edited)
+    return edited is None or now - edited < RECENT_EDIT  # unknown: compare the content
 
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -595,7 +586,7 @@ class NotionTUI(App):
             if self.current and self.current.id == page.id:
                 if page.kind == "data_source":
                     # Keep the toolbar, so a bad view filter or sort can be changed.
-                    self.db_rows = DbRows(page.id)
+                    self.db_rows = DbRows(page.id, failed=True)
                     await self._render_page(page, f"_Could not load rows: {err}_")
                     if self._editing_rows():  # the grid has no place for the message
                         self.notify(str(err), title="Could not load rows", severity="error")
@@ -735,7 +726,8 @@ class NotionTUI(App):
         except NtnError:
             pass  # a passing error: the next minute tries again
 
-    def _still_current(self, page: Page) -> bool:
+    def _worth_refreshing(self, page: Page) -> bool:
+        """Still the focused page, and nothing is in the way of a refresh."""
         return self.current is not None and self.current.id == page.id and not self._watch_paused()
 
     async def _check_page(self, page: Page) -> None:
@@ -745,33 +737,38 @@ class NotionTUI(App):
         if unchanged and not edited_recently(fresh.last_edited, datetime.now(timezone.utc)):
             return
         markdown = await ntn.get_markdown(page.id)
-        if not self._still_current(page):
+        if not self._worth_refreshing(page):
             return
-        page = self._with_edit_time(page, fresh.last_edited)
-        self.cache.put_content(page, markdown)
-        if cached is None or cached[0] != markdown:
+        renamed = fresh.title != page.title
+        page = self._take_fresh(page, fresh)
+        if cached is None or cached != (markdown, page.last_edited):
+            self.cache.put_content(page, markdown)
+        if cached is None or cached[0] != markdown or renamed:
             await self._render_page(page, markdown)  # same page: the scroll position stays
+        if renamed:
+            self._show_path(page)
 
-    def _with_edit_time(self, page: Page, last_edited: str) -> Page:
-        """Give the focused page its new edit time, in the list and the cache too."""
-        if page.last_edited == last_edited:
+    def _take_fresh(self, page: Page, fresh: Page) -> Page:
+        """Give the focused page its new title and edit time, in the list and the cache too."""
+        if (page.title, page.last_edited) == (fresh.title, fresh.last_edited):
             return page
-        newer = replace(page, last_edited=last_edited)
+        newer = replace(page, title=fresh.title, last_edited=fresh.last_edited)
         self.cache.upsert_pages([newer])
         self.loaded = [newer if p.id == page.id else p for p in self.loaded]
         self.shown = [newer if p.id == page.id else p for p in self.shown]
         for item in self.query_one(PageList).query(PageItem):
             if item.page.id == page.id:
                 item.page = newer
+                item.query_one(TitleLabel).update(newer.title)
         self.current = newer
         return newer
 
     async def _check_rows(self, page: Page) -> None:
         rows = self._current_rows()
-        if rows is None or rows.reloading:
+        if rows is None or rows.reloading or rows.failed:  # a failed load is retried with r, not each minute
             return
         fresh, cursor = await ntn.query_rows(page.id, rows.filter, rows.sorts)
-        if not self._still_current(page) or self.db_rows is not rows or rows.reloading:
+        if not self._worth_refreshing(page) or self.db_rows is not rows or rows.reloading:
             return
         shown = rows.rows if cursor is None else rows.rows[: len(fresh)]  # rows paged in later aren't compared
         if rows_key(fresh) != rows_key(shown):

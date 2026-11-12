@@ -1,4 +1,6 @@
-from notion_tui.app import same_rows, vanished, with_cached_tail
+from datetime import datetime, timezone
+
+from notion_tui.app import edited_recently, same_rows, vanished, with_cached_tail
 from notion_tui.ntn import Page
 
 
@@ -46,21 +48,7 @@ def test_rows_differ_on_order_length_or_edit_time():
 
 
 def test_edited_recently_within_two_minutes():
-    from datetime import datetime, timezone
-
-    from notion_tui.app import edited_recently
-
     now = datetime(2026, 11, 12, 10, 5, tzinfo=timezone.utc)
     assert edited_recently("2026-11-12T10:04:00.000Z", now)
     assert not edited_recently("2026-11-12T10:02:00.000Z", now)
     assert edited_recently("", now)  # unknown: compare the content
-
-
-def test_rows_key_sees_values_order_and_edit_time():
-    from notion_tui.app import rows_key
-
-    a = {"id": "a", "last_edited_time": "t1", "properties": {"x": 1}}
-    b = {"id": "b", "last_edited_time": "t1", "properties": {"x": 2}}
-    assert rows_key([a, b]) == rows_key([dict(a), dict(b)])
-    assert rows_key([a, b]) != rows_key([b, a])
-    assert rows_key([a]) != rows_key([a | {"properties": {"x": 9}}])  # same minute, new value

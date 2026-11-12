@@ -48,6 +48,7 @@ class FakeNotion:
         self.gate = None  # set: row queries wait for this event
         self.write_gate = None  # set: row updates wait for this event
         self.fail = False
+        self.fail_queries = False  # set: row queries are refused
         for name in ("search", "get_schema", "list_view_ids", "query_rows", "update_row", "create_row", "trash", "restore"):
             monkeypatch.setattr(ntn, name, getattr(self, name))
 
@@ -62,6 +63,8 @@ class FakeNotion:
 
     async def query_rows(self, data_source_id, filter=None, sorts=None, start_cursor=None, page_size=100):
         self.queries += 1
+        if self.fail_queries:
+            raise NtnError("bad filter")
         if self.gate:
             await self.gate.wait()
         return copy.deepcopy(self.rows), None if start_cursor else self.cursor
@@ -724,5 +727,17 @@ def test_rows_changed_elsewhere_refresh_within_a_minute(tmp_path, notion):
         app._watch_current()
         await settle(app, pilot)
         assert cell(grid, "a", "Name") == "Alef"
+
+    drive(tmp_path, script)
+
+
+def test_rows_that_failed_to_load_are_not_requeried_each_minute(tmp_path, notion):
+    async def script(app, pilot, grid):
+        notion.fail_queries = True
+        await go(app, pilot, "r")
+        queries = notion.queries
+        app._watch_current()
+        await settle(app, pilot)
+        assert notion.queries == queries
 
     drive(tmp_path, script)
