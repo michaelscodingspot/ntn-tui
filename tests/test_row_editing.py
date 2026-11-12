@@ -50,7 +50,7 @@ class FakeNotion:
         self.fail = False
         self.schema = SCHEMA
         self.create_gate = None  # set: row creation waits for this event
-        for name in ("search", "get_schema", "list_view_ids", "query_rows", "update_row", "create_row", "trash", "restore"):
+        for name in ("search", "get_schema", "list_view_ids", "query_rows", "update_row", "create_row", "highest_number", "trash", "restore"):
             monkeypatch.setattr(ntn, name, getattr(self, name))
 
     async def search(self, query="", cursor=None, page_size=50):
@@ -94,6 +94,10 @@ class FakeNotion:
             new["properties"][name] = {"type": "number", **value}
         self.rows.append(new)
         return copy.deepcopy(new)
+
+    async def highest_number(self, data_source_id, name):
+        values = [r["properties"][name]["number"] for r in self.rows if name in r["properties"]]
+        return max((v for v in values if v is not None), default=None)
 
     async def trash(self, page_id):
         self._check()
@@ -473,6 +477,41 @@ def test_insert_row_sets_ord_between_neighbours(tmp_path, notion):
         await go(app, pilot, "G", "i", "X", "enter")  # below the last row
         assert ord_of("new4") == 3
         assert list(grid.texts) == ["new3", "a", "new2", "b", "new4"]
+
+    drive(tmp_path, script, schema=ORD_SCHEMA)
+
+
+def test_new_row_goes_past_the_highest_ord(tmp_path, notion):
+    with_ord(notion, 1, 2)
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "n", "Z", "enter")
+        assert notion.rows[-1]["properties"]["_ord"]["number"] == 10
+        assert list(grid.texts) == ["a", "b", "new2"]
+
+    drive(tmp_path, script, schema=ORD_SCHEMA)
+
+
+def test_new_row_when_no_row_has_an_ord(tmp_path, notion):
+    with_ord(notion, None, None)
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "n", "Z", "enter")
+        assert notion.rows[-1]["properties"]["_ord"]["number"] == 8
+
+    drive(tmp_path, script, schema=ORD_SCHEMA)
+
+
+def test_insert_below_a_row_without_ord_goes_past_the_highest(tmp_path, notion):
+    with_ord(notion, None, 5)
+    notion.cursor = "more"  # the highest comes from Notion, not the loaded rows: no need for m
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "i", "Z", "enter")  # below Alpha, which has no _ord
+        assert notion.rows[-1]["properties"]["_ord"]["number"] == 13
+        assert list(grid.texts) == ["a", "new2", "b"]
+        await go(app, pilot, "k", "I", "Y", "enter")  # above it: no _ord is set
+        assert "_ord" not in notion.rows[-1]["properties"]
 
     drive(tmp_path, script, schema=ORD_SCHEMA)
 

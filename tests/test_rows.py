@@ -158,3 +158,9 @@ def test_new_order():
     assert rows.new_order(ords(5, 1), 0, True, "_ord") == 6  # not shown in _ord order
     assert rows.new_order(ords(3, 3), 0, True, "_ord") == 4  # a tie: halfway would be a tie too
     assert rows.new_order([{"properties": {}}], 0, True, "_ord") is None
+
+
+def test_after_last():
+    assert rows.after_last(5) == 13
+    assert rows.after_last(None) == 8
+    assert rows.after_last(-10) == -2

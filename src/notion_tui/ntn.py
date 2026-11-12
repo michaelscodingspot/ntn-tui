@@ -238,6 +238,17 @@ async def query_rows(
     return rows, data.get("next_cursor") if data.get("has_more") else None
 
 
+async def highest_number(data_source_id: str, name: str) -> float | None:
+    """The highest value of a number column over all the database's rows; None when every row leaves it empty."""
+    rows, _ = await query_rows(
+        data_source_id,
+        filter={"property": name, "number": {"is_not_empty": True}},
+        sorts=[{"property": name, "direction": "descending"}],
+        page_size=1,
+    )
+    return rows[0]["properties"][name].get("number") if rows else None
+
+
 def value_text(prop: dict) -> str:
     """A row property as short plain text ("" when empty or not shown)."""
     kind = prop.get("type")

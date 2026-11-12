@@ -152,6 +152,7 @@ def check_option(name: str) -> str:
 
 
 ORDER_NAME = "_ord"  # a number column that keeps a database's rows in a hand-made order
+ORDER_GAP = 8  # a row added after the last `_ord` leaves this much room for rows inserted between
 
 
 def order_column(schema: list[dict]) -> str | None:
@@ -178,3 +179,9 @@ def new_order(rows: list[dict], index: int, after: bool, name: str) -> float | N
     if there is None or (there - here) * step <= 0:
         return here + step
     return (here + there) / 2
+
+
+def after_last(highest: float | None) -> float:
+    """The `_ord` for a row added after every other: the highest `_ord` plus a gap (the gap alone
+    when no row has an `_ord` yet)."""
+    return (highest or 0) + ORDER_GAP

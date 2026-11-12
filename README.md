@@ -139,8 +139,11 @@ the cursor's row (`i` / `I`) until then.
 A database with a number column named `_ord` keeps a hand-made order: `i` gives the new row an
 `_ord` halfway between the cursor's row and the next one, `I` halfway to the previous one; at the
 last / first row, or when the neighbour's `_ord` isn't on that side (the view isn't sorted by `_ord`),
-it is one more / one less. A cursor row with no `_ord` leaves the new one empty. `i` on the last
-loaded row while more rows wait asks for `m` first: the next row's `_ord` isn't known.
+it is one more / one less. `n`, and `i` below a row with no `_ord`, give the new row the highest
+`_ord` in the database (asked from Notion, so rows not loaded yet count) plus 8, leaving room for
+rows inserted between later; 8 when no row has an `_ord`. `I` above a row with no `_ord` leaves
+it empty. `i` on the last loaded row while more rows wait asks for `m` first: the next row's
+`_ord` isn't known.
 
 | Property                               | Editor                                     |
 |----------------------------------------|--------------------------------------------|

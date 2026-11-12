@@ -936,31 +936,39 @@ class NotionTUI(App):
         await self._render_page(page, markdown)
 
     def action_row_new(self) -> None:
-        self._start_new_row(None, {})
+        """A new row at the bottom. With an `_ord` number column, its `_ord` goes past the highest one."""
+        self._start_new_row(None, {}, self._order_column())
 
     def action_row_insert(self, after: bool) -> None:
         """A new row right below (after) or above the cursor's row. With an `_ord` number column,
-        its `_ord` goes halfway between that row and its neighbour on that side."""
+        its `_ord` goes halfway between that row and its neighbour on that side; below a row with
+        no `_ord`, past the highest one."""
         found = self._cursor_row()
         if not found:
             self.action_row_new()  # no row to put it next to
             return
         rows, row = found
         index = rows.rows.index(row)
-        extra = {}
-        name = row_edit.order_column(self.cache.schema(self.current.id) or [])
+        extra, last = {}, None
+        name = self._order_column()
         if name:
-            if after and index == len(rows.rows) - 1 and rows.cursor is not None:
+            value = row_edit.new_order(rows.rows, index, after, name)
+            if value is None:
+                last = name if after else None
+            elif after and index == len(rows.rows) - 1 and rows.cursor is not None:
                 self.notify("The next row isn't loaded: press m for more rows first.", severity="warning")
                 return
-            value = row_edit.new_order(rows.rows, index, after, name)
-            if value is not None:
+            else:
                 extra[name] = {"number": value}
-        self._start_new_row((row["id"], after), extra)
+        self._start_new_row((row["id"], after), extra, last)
 
-    def _start_new_row(self, anchor: tuple[str, bool] | None, extra: dict) -> None:
+    def _order_column(self) -> str | None:
+        return row_edit.order_column(self.cache.schema(self.current.id) or [])
+
+    def _start_new_row(self, anchor: tuple[str, bool] | None, extra: dict, last: str | None) -> None:
         """Open a row for a new title: at the bottom, or right after / before the anchor row
-        (its ID, and whether after it). `extra`: other property values to create it with."""
+        (its ID, and whether after it). `extra`: other property values to create it with;
+        `last`: a number column to set past its highest value, asked from Notion when the row is created."""
         grid, page = self.query_one(RowGrid), self.current
         schema = self.cache.schema(page.id) or []
         title = next((p["name"] for p in schema if p["type"] == "title"), None)
@@ -970,27 +978,33 @@ class NotionTUI(App):
             self.notify("Still adding the last row.", severity="warning")
         else:
             grid.add_new_row(title, grid.get_row_index(anchor[0]) + anchor[1] if anchor else None)
-            self.call_after_refresh(self._ask_new_title, page, title, anchor, extra)
+            self.call_after_refresh(self._ask_new_title, page, title, anchor, extra, last)
 
-    def _ask_new_title(self, page: Page, title: str, anchor: tuple[str, bool] | None, extra: dict) -> None:
+    def _ask_new_title(
+        self, page: Page, title: str, anchor: tuple[str, bool] | None, extra: dict, last: str | None
+    ) -> None:
         grid = self.query_one(RowGrid)
 
         def done(text: str | None) -> None:
             if text:
                 grid.set_cell(NEW_ROW, title, text)
                 grid.mark(NEW_ROW, "…")
-                self._create_row(page, text, anchor, extra)
+                self._create_row(page, text, anchor, extra, last)
             else:
                 grid.drop_row(NEW_ROW)
 
         self.push_screen(CellTextScreen("", grid.cell_region(), str.strip), done)
 
     @work(group="row-write")
-    async def _create_row(self, page: Page, title: str, anchor: tuple[str, bool] | None, extra: dict) -> None:
+    async def _create_row(
+        self, page: Page, title: str, anchor: tuple[str, bool] | None, extra: dict, last: str | None
+    ) -> None:
         grid = self.query_one(RowGrid)
         try:
             async with self._row_writes:
                 with self._busy():
+                    if last:  # all rows count, loaded or not: Notion is asked for the highest
+                        extra = extra | {last: {"number": row_edit.after_last(await ntn.highest_number(page.id, last))}}
                     row = await ntn.create_row(page.id, title, extra)
         except NtnError as err:
             grid.drop_row(NEW_ROW)
