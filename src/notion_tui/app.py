@@ -1278,6 +1278,12 @@ class NotionTUI(App):
         if self.current:
             self.cache.invalidate(self.current.id)
             self._meta_fresh.discard(self.current.id)  # a database's views and schema are fetched again too
+            # A list that comes back the same moves no cursor, so nothing else would refetch the preview or rows.
+            # The shown preview stays, marked, until the fresh one replaces it.
+            self.query_one("#preview-pane").border_subtitle = "refreshing…"
+            if self._is_db():
+                self._render_db_bar(loading=True)
+            self.fetch_preview(self.current)
         self.load_list(self.query_text)
 
     def _is_page(self, page: Page | None, verb: str) -> bool:
