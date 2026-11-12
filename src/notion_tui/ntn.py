@@ -142,6 +142,11 @@ async def search(query: str = "", cursor: str | None = None, page_size: int = 50
     return pages, data.get("next_cursor") if data.get("has_more") else None
 
 
+async def get_page(page_id: str) -> Page:
+    """A page's list item fresh from Notion: its title and last edit time."""
+    return _page(json.loads(await _run("api", "v1/pages/" + page_id)))
+
+
 _NODE_ENDPOINTS = {
     "page": "v1/pages/",
     "database": "v1/databases/",

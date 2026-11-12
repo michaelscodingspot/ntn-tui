@@ -243,6 +243,12 @@ through `narrow-window-watcher.py` in my-automations, which saves the setting in
   a session and on `r`, and the rows are reloaded if they changed. `db_state` keeps each
   database's current view, filter line and sort. Rows are always fetched fresh, 100 at a
   time; `m` asks Notion for the next 100 with the query's cursor.
+- Staleness watch: once a minute the focused item is checked against Notion. A page's
+  `ntn api v1/pages/<id>` edit time is compared, and its content is read again when the time
+  moved or is under two minutes old (Notion's edit time has minute steps); the preview is
+  redrawn, scroll kept, only when the content differs. A database's first 100 rows are queried
+  again and the rows reload when any row's order, edit time or values differ. The check skips
+  a minute while a dialog is open or an edit, save or fetch of the page is running.
 - The rows query is the view's filter AND the filter line, and the sort picker's sort, else
   the view's. Properties are referred to by ID, so renamed properties keep working.
 - Whether an entry has content is checked once per edit with

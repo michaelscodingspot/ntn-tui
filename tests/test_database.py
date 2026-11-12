@@ -1,5 +1,6 @@
 from notion_tui import database
 from notion_tui.database import (
+    rows_key,
     can_switch_layout,
     next_layout,
     rows_markdown,
@@ -71,6 +72,14 @@ def test_column_widths_give_a_long_column_the_room_left():
     assert database.column_widths([60, 60], 100) == [50, 50]
     assert database.column_widths([30, 5, 30], 41) == [18, 5, 18]
     assert database.column_widths([50, 50], 4) == [8, 8]
+
+
+def test_rows_key_sees_values_order_and_edit_time():
+    a = {"id": "a", "last_edited_time": "t1", "properties": {"x": 1}}
+    b = {"id": "b", "last_edited_time": "t1", "properties": {"x": 2}}
+    assert rows_key([a, b]) == rows_key([dict(a), dict(b)])
+    assert rows_key([a, b]) != rows_key([b, a])
+    assert rows_key([a]) != rows_key([a | {"properties": {"x": 9}}])  # same minute, new value
 
 
 def test_insert_next_to():
