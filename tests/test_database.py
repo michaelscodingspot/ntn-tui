@@ -71,3 +71,11 @@ def test_column_widths_give_a_long_column_the_room_left():
     assert database.column_widths([60, 60], 100) == [50, 50]
     assert database.column_widths([30, 5, 30], 41) == [18, 5, 18]
     assert database.column_widths([50, 50], 4) == [8, 8]
+
+
+def test_insert_next_to():
+    rows = [{"id": "a"}, {"id": "b"}]
+    database.insert_next_to(rows, {"id": "x"}, "a", True)
+    database.insert_next_to(rows, {"id": "y"}, "a", False)
+    database.insert_next_to(rows, {"id": "z"}, "gone", True)
+    assert [r["id"] for r in rows] == ["y", "a", "x", "b", "z"]

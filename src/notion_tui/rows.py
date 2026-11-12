@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime
+from enum import Enum
 
 from .ntn import value_text
 
@@ -149,3 +150,58 @@ def check_option(name: str) -> str:
     if "," in name:
         raise ValueError("Option names can't contain a comma.")
     return name
+
+
+ORDER_NAME = "_ord"  # a number column that keeps a database's rows in a hand-made order
+ORDER_GAP = 8  # a row added after the last `_ord` leaves this much room for rows inserted between
+
+
+def order_column(schema: list[dict]) -> str | None:
+    """The database's `_ord` number column, if it has one."""
+    return next((p["name"] for p in schema if p["name"].strip() == ORDER_NAME and p["type"] == "number"), None)
+
+
+def _number(row: dict, name: str) -> float | None:
+    prop = row["properties"].get(name) or {}
+    return prop.get("number") if prop.get("type") == "number" else None
+
+
+def new_order(rows: list[dict], index: int, after: bool, name: str) -> float | None:
+    """The `_ord` (column `name`) for a row put right after / before rows[index]: halfway to its
+    neighbour on that side, or one past it when there's no neighbour, the neighbour has no `_ord`,
+    or its `_ord` isn't on that side (the rows aren't shown in `_ord` order). None when rows[index]
+    has no `_ord` itself."""
+    here = _number(rows[index], name)
+    if here is None:
+        return None
+    step = 1 if after else -1
+    near = index + step
+    there = _number(rows[near], name) if 0 <= near < len(rows) else None
+    if there is None or (there - here) * step <= 0:
+        return here + step
+    return (here + there) / 2
+
+
+def after_last(highest: float | None) -> float:
+    """The `_ord` for a row added after every other: the highest `_ord` plus a gap (the gap alone
+    when no row has an `_ord` yet)."""
+    return (highest or 0) + ORDER_GAP
+
+
+class Order(Enum):
+    """`_ord` outcomes that aren't a number known up front."""
+
+    LAST = "last"  # past the highest `_ord` in the database, asked from Notion when the row is created
+    NEEDS_MORE = "needs more"  # the next row isn't loaded, so there's nothing to go halfway to
+
+
+def insert_order(rows: list[dict], index: int, after: bool, name: str, more: bool) -> float | Order | None:
+    """The `_ord` (column `name`) for a row inserted right after / before rows[index]; `more`: rows
+    beyond the loaded ones wait. Below a row with no `_ord`: past the highest. Above one: none, the
+    new row's `_ord` stays empty."""
+    value = new_order(rows, index, after, name)
+    if value is None:
+        return Order.LAST if after else None
+    if after and index == len(rows) - 1 and more:
+        return Order.NEEDS_MORE
+    return value
