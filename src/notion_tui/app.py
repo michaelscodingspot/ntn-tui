@@ -6,6 +6,7 @@ import asyncio
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 
 from rich.text import Text
@@ -28,6 +29,7 @@ from .database import (
     can_edit_rows,
     can_switch_layout,
     find_row,
+    insert_next_to,
     grid_columns,
     next_layout,
     people_names,
@@ -203,6 +205,16 @@ def same_rows(a: list[Page], b: list[Page]) -> bool:
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+@dataclass(frozen=True)
+class NewRow:
+    """A row about to be added: next to which row (None: at the bottom) and on which side,
+    and its `_ord` column and value (a number, past the highest, or none)."""
+
+    anchor: str | None = None
+    after: bool = True
+    ord_name: str | None = None
+    ord_value: float | row_edit.Order | None = None
+
 class NotionTUI(App):
     TITLE = "notion-tui"
     CSS = """
@@ -236,6 +248,7 @@ class NotionTUI(App):
 
     BINDINGS = [
         Binding("slash", "focus_search", "search"),
+        Binding("w", "switch_pane", "switch pane"),
         Binding("v", "db_edit_mode", "view/edit rows"),
         Binding("t", "db_layout", "list/table"),
         Binding("e", "edit", "edit"),
@@ -464,7 +477,7 @@ class NotionTUI(App):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         self.screen.add_class("full")
-        self.query_one(RowGrid if self._editing_rows() else PreviewScroll).focus()
+        self._focus_preview()
 
     # ---------- search ----------
 
@@ -802,6 +815,16 @@ class NotionTUI(App):
         """What takes the focus when the grid goes away."""
         return self.query_one(PreviewScroll if self.screen.has_class("full") else PageList)
 
+    def _focus_preview(self) -> None:
+        """Focus the preview side: the grid when it is showing, otherwise the Markdown preview."""
+        grid = self.query_one(RowGrid)
+        (grid if grid.display else self.query_one(PreviewScroll)).focus()
+
+    def _focus_list(self) -> None:
+        """Show the list pane again (leaving full width) and focus the page list."""
+        self.screen.remove_class("full")
+        self.query_one(PageList).focus()
+
     def action_focus_grid(self) -> None:
         self.query_one(RowGrid).focus()
 
@@ -921,8 +944,9 @@ class NotionTUI(App):
             self.cache.invalidate(page.id)  # moved on: the cached table is out of date
             return
         old = find_row(rows.rows, row_id)
-        if old and name != row_edit.ORDER and row_edit.ORDER in old["properties"]:
-            fresh["properties"][row_edit.ORDER] = old["properties"][row_edit.ORDER]  # a move made meanwhile
+        order = self._order_column()
+        if old and order and name != order and order in old["properties"]:
+            fresh["properties"][order] = old["properties"][order]  # a move made meanwhile
         replace_row(rows.rows, fresh)
         grid.redraw_row(fresh)
         grid.mark_saved(row_id)
@@ -939,6 +963,30 @@ class NotionTUI(App):
         await self._render_page(page, markdown)
 
     def action_row_new(self) -> None:
+        """A new row at the bottom. With an `_ord` number column, its `_ord` goes past the highest one."""
+        name = self._order_column()
+        self._start_new_row(NewRow(ord_name=name, ord_value=row_edit.Order.LAST if name else None))
+
+    def action_row_insert(self, after: bool) -> None:
+        """A new row right below (after) or above the cursor's row, its `_ord` set as rows.py decides."""
+        found = self._cursor_row()
+        if not found:
+            self.action_row_new()  # no row to put it next to
+            return
+        rows, row = found
+        name, value = self._order_column(), None
+        if name:
+            value = row_edit.insert_order(rows.rows, rows.rows.index(row), after, name, rows.cursor is not None)
+            if value is row_edit.Order.NEEDS_MORE:
+                self.notify("The next row isn't loaded: press m for more rows first.", severity="warning")
+                return
+        self._start_new_row(NewRow(row["id"], after, name, value))
+
+    def _order_column(self) -> str | None:
+        return row_edit.order_column(self.cache.schema(self.current.id) or [])
+
+    def _start_new_row(self, new: NewRow) -> None:
+        """Open a row for a new title, at the bottom or next to its anchor row."""
         grid, page = self.query_one(RowGrid), self.current
         schema = self.cache.schema(page.id) or []
         title = next((p["name"] for p in schema if p["type"] == "title"), None)
@@ -947,29 +995,34 @@ class NotionTUI(App):
         elif grid.has_row(NEW_ROW):
             self.notify("Still adding the last row.", severity="warning")
         else:
-            grid.add_new_row(title)
-            self.call_after_refresh(self._ask_new_title, page, title)
+            grid.add_new_row(title, grid.get_row_index(new.anchor) + new.after if new.anchor else None)
+            self.call_after_refresh(self._ask_new_title, page, title, new)
 
-    def _ask_new_title(self, page: Page, title: str) -> None:
+    def _ask_new_title(self, page: Page, title: str, new: NewRow) -> None:
         grid = self.query_one(RowGrid)
 
         def done(text: str | None) -> None:
             if text:
                 grid.set_cell(NEW_ROW, title, text)
                 grid.mark(NEW_ROW, "…")
-                self._create_row(page, text)
+                self._create_row(page, text, new)
             else:
                 grid.drop_row(NEW_ROW)
 
         self.push_screen(CellTextScreen("", grid.cell_region(), str.strip), done)
 
     @work(group="row-write")
-    async def _create_row(self, page: Page, title: str) -> None:
+    async def _create_row(self, page: Page, title: str, new: NewRow) -> None:
         grid = self.query_one(RowGrid)
         try:
             async with self._row_writes:
                 with self._busy():
-                    row = await ntn.create_row(page.id, title)
+                    value = new.ord_value
+                    if value is row_edit.Order.LAST:  # all rows count, loaded or not: Notion is asked
+                        highest = await ntn.highest_number(page.id, new.ord_name)
+                        value = row_edit.after_last(highest)
+                    extra = {new.ord_name: {"number": value}} if value is not None else {}
+                    row = await ntn.create_row(page.id, title, extra)
         except NtnError as err:
             grid.drop_row(NEW_ROW)
             self.notify(str(err), title="Could not add the row", severity="error")
@@ -979,7 +1032,10 @@ class NotionTUI(App):
             self.cache.invalidate(page.id)
             return
         grid.drop_row(NEW_ROW)
-        rows.rows.append(row)
+        if new.anchor:
+            insert_next_to(rows.rows, row, new.anchor, new.after)
+        else:
+            rows.rows.append(row)
         self._learn_people(page.id, [row])
         await self._store_rows(page, rows)
         grid.select_row(row["id"])
@@ -1049,24 +1105,21 @@ class NotionTUI(App):
             return
         self.notify(f"Restored “{ntn.row_title(row)}”.")
 
-    def _order_column(self) -> dict | None:
-        return row_edit.order_column(self.cache.schema(self.current.id)) if self._is_db() else None
-
     async def action_row_move(self, step: int) -> None:
         """Move the row under the cursor one place up or down by changing `_ord`; the cursor goes with it."""
-        found, column, grid = self._cursor_row(), self._order_column(), self.query_one(RowGrid)
-        if not found or column is None or found[0].reloading:
+        found, name, grid = self._cursor_row(), self._order_column(), self.query_one(RowGrid)
+        if not found or name is None or found[0].reloading:
             return
         if grid.has_row(NEW_ROW):
             self.notify("Still adding the last row.", severity="warning")
             return
         rows, row = found
-        descending = row_edit.order_descending(column, rows.sorts)  # the sort these rows came in
+        descending = row_edit.order_descending(self.cache.schema(self.current.id) or [], name, rows.sorts)  # the sort these rows came in
         if descending is None:
-            self.notify(f"Moving rows works when they are sorted by {row_edit.ORDER} first.", severity="warning")
+            self.notify(f"Moving rows works when they are sorted by {row_edit.ORDER_NAME} first.", severity="warning")
             return
         index = rows.rows.index(row)
-        changes = row_edit.move_row(rows.rows, index, step, descending)
+        changes = row_edit.move_row(rows.rows, index, step, descending, name)
         if changes is None:
             return
         grid.swap_rows(rows.rows[index], rows.rows[index + step])
@@ -1074,11 +1127,11 @@ class NotionTUI(App):
         for row_id, _ in changes:
             self._last_move[row_id] = self._moves
             grid.mark(row_id, "…")
-        self._write_order(self.current, changes, self._moves)
+        self._write_order(self.current, name, changes, self._moves)
         await self._store_rows(self.current, rows)
 
     @work(group="row-write")
-    async def _write_order(self, page: Page, changes: list[tuple[str, int | float]], move: int) -> None:
+    async def _write_order(self, page: Page, name: str, changes: list[tuple[str, int | float]], move: int) -> None:
         """Save a move's new `_ord` values. The rows keep the values set at the press, not Notion's
         reply: a later move may have changed them again already."""
         grid = self.query_one(RowGrid)
@@ -1087,7 +1140,7 @@ class NotionTUI(App):
                 return  # an earlier move failed: the reload shows Notion's order instead
             try:
                 with self._busy():
-                    await asyncio.gather(*(ntn.update_row(row_id, {row_edit.ORDER: {"number": value}}) for row_id, value in changes))
+                    await asyncio.gather(*(ntn.update_row(row_id, {name: {"number": value}}) for row_id, value in changes))
             except NtnError as err:
                 self._moves_dropped = self._moves
                 for row_id in self._last_move:
@@ -1174,7 +1227,7 @@ class NotionTUI(App):
             if action == "db_layout":
                 return can_switch_layout(self._db_request(self.current.id).view) and not self._editing_rows()
         if action == "row_move":
-            return self._order_column() is not None
+            return self._is_db() and self._order_column() is not None
         if action == "focus_grid":
             return self._is_db() and self.query_one(RowGrid).display
         if action == "links":
@@ -1314,6 +1367,13 @@ class NotionTUI(App):
         self.screen.remove_class("full")
         self.query_one("#search", Input).focus()
 
+    def action_switch_pane(self) -> None:
+        """Move the focus between the page list and the preview, never to the search box (unlike tab)."""
+        if self.query_one(PageList).has_focus:
+            self._focus_preview()
+        else:
+            self._focus_list()
+
     def action_back(self) -> None:
         if self.query_one("#dbquery", Input).has_focus:
             self._close_db_query()  # cancel: the query line keeps its applied value
@@ -1326,8 +1386,7 @@ class NotionTUI(App):
         if search.has_focus and search.value:
             search.value = ""
             return
-        self.screen.remove_class("full")
-        self.query_one(PageList).focus()
+        self._focus_list()
 
     def action_refresh(self) -> None:
         self.next_cursor = None

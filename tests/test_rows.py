@@ -139,6 +139,45 @@ def test_edit_mode_column_is_added_to_old_caches(tmp_path):
     assert cache.db_state("ds") == ("v1", "", None)
 
 
+def test_order_column():
+    assert rows.order_column([{"name": "Name", "type": "title"}, {"name": "_ord", "type": "number"}]) == "_ord"
+    assert rows.order_column([{"name": "_ord", "type": "rich_text"}]) is None
+    assert rows.order_column([]) is None
+
+
+def test_new_order():
+    def ords(*values):
+        return [{"properties": {"_ord": {"type": "number", "number": v}}} for v in values]
+
+    assert rows.new_order(ords(1, 2), 0, True, "_ord") == 1.5
+    assert rows.new_order(ords(1, 2), 1, False, "_ord") == 1.5
+    assert rows.new_order(ords(1, 2), 1, True, "_ord") == 3  # last row
+    assert rows.new_order(ords(1, 2), 0, False, "_ord") == 0  # first row
+    assert rows.new_order(ords(1, None), 0, True, "_ord") == 2  # neighbour without _ord
+    assert rows.new_order(ords(None, 2), 0, True, "_ord") is None  # cursor row without _ord
+    assert rows.new_order(ords(5, 1), 0, True, "_ord") == 6  # not shown in _ord order
+    assert rows.new_order(ords(3, 3), 0, True, "_ord") == 4  # a tie: halfway would be a tie too
+    assert rows.new_order([{"properties": {}}], 0, True, "_ord") is None
+
+
+def test_after_last():
+    assert rows.after_last(5) == 13
+    assert rows.after_last(None) == 8
+    assert rows.after_last(-10) == -2
+
+
+def test_insert_order():
+    def ords(*values):
+        return [{"properties": {"_ord": {"type": "number", "number": v}}} for v in values]
+
+    assert rows.insert_order(ords(1, 2), 0, True, "_ord", False) == 1.5
+    assert rows.insert_order(ords(1, 2), 1, True, "_ord", True) is rows.Order.NEEDS_MORE  # next row not loaded
+    assert rows.insert_order(ords(1, 2), 1, True, "_ord", False) == 3
+    assert rows.insert_order(ords(1, 2), 0, False, "_ord", True) == 0  # above: loaded neighbours enough
+    assert rows.insert_order(ords(None, 2), 0, True, "_ord", True) is rows.Order.LAST  # below a row without _ord
+    assert rows.insert_order(ords(None, 2), 0, False, "_ord", False) is None  # above one: left empty
+
+
 def test_order_moves_swap_two_values():
     assert rows.order_moves([1, 2, 3.5], 1, 1) == {1: 3.5, 2: 2}
     assert rows.order_moves([1, 2, 3.5], 1, -1) == {0: 2, 1: 1}
@@ -164,18 +203,16 @@ def test_order_moves_descending():
     assert rows.order_moves([5, 3, 3], 1, 1, descending=True) == {2: 3, 1: 2}
 
 
-def test_order_column_and_sort():
-    column = {"id": "ord", "name": "_ord", "type": "number", "options": []}
-    assert rows.order_column([{"id": "t", "name": "Name", "type": "title"}, column]) is column
-    assert rows.order_column([{"id": "o", "name": "_ord", "type": "rich_text"}]) is None
-    assert rows.order_descending(column, [{"property": "ord", "direction": "ascending"}]) is False
-    assert rows.order_descending(column, [{"property": "ord", "direction": "descending"}]) is True
-    assert rows.order_descending(column, [{"property": "x", "direction": "ascending"}, {"property": "ord"}]) is None
-    assert rows.order_descending(column, None) is None
+def test_order_descending():
+    schema = [{"id": "ord", "name": "_ord", "type": "number", "options": []}]
+    assert rows.order_descending(schema, "_ord", [{"property": "ord", "direction": "ascending"}]) is False
+    assert rows.order_descending(schema, "_ord", [{"property": "ord", "direction": "descending"}]) is True
+    assert rows.order_descending(schema, "_ord", [{"property": "x", "direction": "ascending"}, {"property": "ord"}]) is None
+    assert rows.order_descending(schema, "_ord", None) is None
 
 
 def test_move_row_swaps_the_rows_and_returns_what_to_save():
     listed = [{"id": i, "properties": {"_ord": {"type": "number", "number": n}}} for i, n in (("a", 1), ("b", 2), ("c", 3))]
-    assert rows.move_row(listed, 2, -1, False) == [("c", 2), ("b", 3)]
+    assert rows.move_row(listed, 2, -1, False, "_ord") == [("c", 2), ("b", 3)]
     assert [(r["id"], r["properties"]["_ord"]["number"]) for r in listed] == [("a", 1), ("c", 2), ("b", 3)]
-    assert rows.move_row(listed, 0, -1, False) is None
+    assert rows.move_row(listed, 0, -1, False, "_ord") is None

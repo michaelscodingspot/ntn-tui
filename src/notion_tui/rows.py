@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime
+from enum import Enum
 
 from .ntn import value_text
 
@@ -151,19 +152,67 @@ def check_option(name: str) -> str:
     return name
 
 
-
-ORDER = "_ord"  # a number column whose ascending (or descending) sort is the order the user keeps by hand
-
-
-def order_column(schema: list[dict] | None) -> dict | None:
-    """The `_ord` number column, which alt+j / alt+k reorder rows by; None = the database has none."""
-    return next((p for p in schema or [] if p["name"] == ORDER and p["type"] == "number"), None)
+ORDER_NAME = "_ord"  # a number column that keeps a database's rows in a hand-made order
+ORDER_GAP = 8  # a row added after the last `_ord` leaves this much room for rows inserted between
 
 
-def order_descending(column: dict, sorts: list | None) -> bool | None:
-    """Whether rows sorted by `sorts` go down `_ord` (True) or up (False); None = not sorted by `_ord` first."""
+def order_column(schema: list[dict]) -> str | None:
+    """The database's `_ord` number column, if it has one."""
+    return next((p["name"] for p in schema if p["name"].strip() == ORDER_NAME and p["type"] == "number"), None)
+
+
+def _number(row: dict, name: str) -> float | None:
+    prop = row["properties"].get(name) or {}
+    return prop.get("number") if prop.get("type") == "number" else None
+
+
+def new_order(rows: list[dict], index: int, after: bool, name: str) -> float | None:
+    """The `_ord` (column `name`) for a row put right after / before rows[index]: halfway to its
+    neighbour on that side, or one past it when there's no neighbour, the neighbour has no `_ord`,
+    or its `_ord` isn't on that side (the rows aren't shown in `_ord` order). None when rows[index]
+    has no `_ord` itself."""
+    here = _number(rows[index], name)
+    if here is None:
+        return None
+    step = 1 if after else -1
+    near = index + step
+    there = _number(rows[near], name) if 0 <= near < len(rows) else None
+    if there is None or (there - here) * step <= 0:
+        return here + step
+    return (here + there) / 2
+
+
+def after_last(highest: float | None) -> float:
+    """The `_ord` for a row added after every other: the highest `_ord` plus a gap (the gap alone
+    when no row has an `_ord` yet)."""
+    return (highest or 0) + ORDER_GAP
+
+
+class Order(Enum):
+    """`_ord` outcomes that aren't a number known up front."""
+
+    LAST = "last"  # past the highest `_ord` in the database, asked from Notion when the row is created
+    NEEDS_MORE = "needs more"  # the next row isn't loaded, so there's nothing to go halfway to
+
+
+def insert_order(rows: list[dict], index: int, after: bool, name: str, more: bool) -> float | Order | None:
+    """The `_ord` (column `name`) for a row inserted right after / before rows[index]; `more`: rows
+    beyond the loaded ones wait. Below a row with no `_ord`: past the highest. Above one: none, the
+    new row's `_ord` stays empty."""
+    value = new_order(rows, index, after, name)
+    if value is None:
+        return Order.LAST if after else None
+    if after and index == len(rows) - 1 and more:
+        return Order.NEEDS_MORE
+    return value
+
+
+def order_descending(schema: list[dict], name: str, sorts: list | None) -> bool | None:
+    """Whether rows sorted by `sorts` go down the `_ord` column `name` (True) or up (False); None = not
+    sorted by it first."""
     first = (sorts or [None])[0]
-    if not first or first.get("property") != column["id"]:
+    column = next((p for p in schema if p["name"] == name), None)
+    if not first or not column or first.get("property") != column["id"]:
         return None
     return first.get("direction") == "descending"
 
@@ -193,13 +242,13 @@ def order_moves(values: list[float | None], index: int, step: int, descending: b
     return {bottom: _whole_as_int(first), top: _whole_as_int(second)}  # the lower row goes on top
 
 
-def move_row(rows: list[dict], index: int, step: int, descending: bool) -> list[tuple[str, int | float]] | None:
-    """Move the row at `index` one place by giving it and its neighbour new `_ord` values, in place;
-    returns the (row ID, value) pairs to save, or None at the edge."""
-    moves = order_moves([row["properties"][ORDER]["number"] for row in rows], index, step, descending)
+def move_row(rows: list[dict], index: int, step: int, descending: bool, name: str) -> list[tuple[str, int | float]] | None:
+    """Move the row at `index` one place by giving it and its neighbour new values in the `_ord` column
+    `name`, in place; returns the (row ID, value) pairs to save, or None at the edge."""
+    moves = order_moves([_number(row, name) for row in rows], index, step, descending)
     if moves is None:
         return None
     for i, value in moves.items():
-        rows[i]["properties"][ORDER]["number"] = value
+        rows[i]["properties"][name]["number"] = value
     rows[index], rows[index + step] = rows[index + step], rows[index]
     return [(rows[i]["id"], value) for i, value in ((index + step, moves[index]), (index, moves[index + step]))]

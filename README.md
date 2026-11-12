@@ -41,6 +41,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `enter`        | open page full screen                    |
 | `esc`          | back to list / clear search              |
 | `tab`          | cycle search → list → preview            |
+| `w`            | switch list ↔ preview (skips search)     |
 | `/`            | search (instant from cache, then Notion) |
 | `e`            | edit page in `$VISUAL` / `$EDITOR`; on a database, the Edit mode grid |
 | `n`            | new page: title and place, then `$EDITOR` |
@@ -108,7 +109,8 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | `j` `k` `h` `l`, arrows | move between cells                              |
 | `g` / `G`           | first / last row                                    |
 | `enter`             | edit the cell (`space` too)                         |
-| `n`                 | new row: type its title                             |
+| `n`                 | new row at the bottom: type its title               |
+| `i` / `I`           | new row right below / above the cursor's row (`_ord` below) |
 | `x`                 | delete the row, to Notion's trash, without asking   |
 | `u`                 | bring back the last deleted row (several in a row work) |
 | `alt+j` / `alt+k`, `alt+↓` / `alt+↑` | move the row down / up (databases with an `_ord` column, below) |
@@ -133,7 +135,17 @@ it, and the task is sent once Claude is ready.
 
 Each change is saved to Notion at once: `…` in the row's gutter while saving, `✓` when done.
 If Notion refuses, the old value comes back with a message. A row changed so it no longer
-fits the filter or sort stays where it is until `r`; new rows go at the bottom until then.
+fits the filter or sort stays where it is until `r`; new rows go at the bottom (`n`) or next to
+the cursor's row (`i` / `I`) until then.
+
+A database with a number column named `_ord` keeps a hand-made order: `i` gives the new row an
+`_ord` halfway between the cursor's row and the next one, `I` halfway to the previous one; at the
+last / first row, or when the neighbour's `_ord` isn't on that side (the view isn't sorted by `_ord`),
+it is one more / one less. `n`, and `i` below a row with no `_ord`, give the new row the highest
+`_ord` in the database (asked from Notion, so rows not loaded yet count) plus 8, leaving room for
+rows inserted between later; 8 when no row has an `_ord`. `I` above a row with no `_ord` leaves
+it empty. `i` on the last loaded row while more rows wait asks for `m` first: the next row's
+`_ord` isn't known.
 
 `alt+j` / `alt+k` reorder rows in a database with a number column named `_ord`, when the rows are
 sorted by `_ord` first (ascending or descending). The row and its neighbour swap `_ord` values; when
