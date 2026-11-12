@@ -161,6 +161,23 @@ def test_keys_from_the_list_go_into_a_showing_grid(tmp_path, notion, key):
     drive(tmp_path, script)
 
 
+@pytest.mark.parametrize("edit", [False, True])
+def test_w_switches_between_list_and_preview(tmp_path, notion, edit):
+    async def script(app, pilot, grid):
+        target = grid if edit else app.query_one(PreviewScroll)
+        assert app.query_one(PageList).has_focus
+        await go(app, pilot, "w")
+        assert target.has_focus
+        await go(app, pilot, "w")
+        assert app.query_one(PageList).has_focus
+        await go(app, pilot, "/")
+        assert app.query_one("#search", Input).has_focus
+        await go(app, pilot, "w")  # typed into the search box, not a pane switch
+        assert app.query_one("#search", Input).value == "w"
+
+    drive(tmp_path, script, edit=edit)
+
+
 def test_l_still_opens_links_without_a_grid(tmp_path, notion):
     async def script(app, pilot, grid):
         app.links = [Link("https://example.com", "Example")]
