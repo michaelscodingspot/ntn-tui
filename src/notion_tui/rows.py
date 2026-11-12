@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime
+from enum import Enum
 
 from .ntn import value_text
 
@@ -185,3 +186,22 @@ def after_last(highest: float | None) -> float:
     """The `_ord` for a row added after every other: the highest `_ord` plus a gap (the gap alone
     when no row has an `_ord` yet)."""
     return (highest or 0) + ORDER_GAP
+
+
+class Order(Enum):
+    """`_ord` outcomes that aren't a number known up front."""
+
+    LAST = "last"  # past the highest `_ord` in the database, asked from Notion when the row is created
+    NEEDS_MORE = "needs more"  # the next row isn't loaded, so there's nothing to go halfway to
+
+
+def insert_order(rows: list[dict], index: int, after: bool, name: str, more: bool) -> float | Order | None:
+    """The `_ord` (column `name`) for a row inserted right after / before rows[index]; `more`: rows
+    beyond the loaded ones wait. Below a row with no `_ord`: past the highest. Above one: none, the
+    new row's `_ord` stays empty."""
+    value = new_order(rows, index, after, name)
+    if value is None:
+        return Order.LAST if after else None
+    if after and index == len(rows) - 1 and more:
+        return Order.NEEDS_MORE
+    return value

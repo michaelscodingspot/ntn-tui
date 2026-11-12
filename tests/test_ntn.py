@@ -37,3 +37,20 @@ def test_trash_database_patches_in_trash(monkeypatch):
     calls = fake_run(monkeypatch, {"v1/databases/db": "{}"})
     asyncio.run(ntn.trash_database("db"))
     assert calls == [("api", "v1/databases/db", "-X", "PATCH", "-d", '{"in_trash": true}')]
+
+
+def test_highest_number_asks_for_the_top_non_empty_value(monkeypatch):
+    calls = fake_run(monkeypatch, {"v1/data_sources/ds/query": json.dumps(
+        {"results": [{"properties": {"_ord": {"type": "number", "number": 7}}}], "has_more": True})})
+    assert asyncio.run(ntn.highest_number("ds", "_ord")) == 7
+    body = json.loads(calls[0][-1])
+    assert body == {
+        "page_size": 1,
+        "filter": {"property": "_ord", "number": {"is_not_empty": True}},
+        "sorts": [{"property": "_ord", "direction": "descending"}],
+    }
+
+
+def test_highest_number_when_every_row_is_empty(monkeypatch):
+    fake_run(monkeypatch, {"v1/data_sources/ds/query": json.dumps({"results": [], "has_more": False})})
+    assert asyncio.run(ntn.highest_number("ds", "_ord")) is None

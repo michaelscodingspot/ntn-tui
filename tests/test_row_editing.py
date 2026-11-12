@@ -96,6 +96,7 @@ class FakeNotion:
         return copy.deepcopy(new)
 
     async def highest_number(self, data_source_id, name):
+        self._check()
         values = [r["properties"][name]["number"] for r in self.rows if name in r["properties"]]
         return max((v for v in values if v is not None), default=None)
 
@@ -488,6 +489,17 @@ def test_new_row_goes_past_the_highest_ord(tmp_path, notion):
         await go(app, pilot, "enter", "n", "Z", "enter")
         assert notion.rows[-1]["properties"]["_ord"]["number"] == 10
         assert list(grid.texts) == ["a", "b", "new2"]
+
+    drive(tmp_path, script, schema=ORD_SCHEMA)
+
+
+def test_new_row_when_notion_wont_say_the_highest_ord(tmp_path, notion):
+    with_ord(notion, 1, 2)
+
+    async def script(app, pilot, grid):
+        notion.fail = True
+        await go(app, pilot, "enter", "n", "Z", "enter")
+        assert list(grid.texts) == ["a", "b"] and len(notion.rows) == 2
 
     drive(tmp_path, script, schema=ORD_SCHEMA)
 

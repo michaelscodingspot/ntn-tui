@@ -164,3 +164,15 @@ def test_after_last():
     assert rows.after_last(5) == 13
     assert rows.after_last(None) == 8
     assert rows.after_last(-10) == -2
+
+
+def test_insert_order():
+    def ords(*values):
+        return [{"properties": {"_ord": {"type": "number", "number": v}}} for v in values]
+
+    assert rows.insert_order(ords(1, 2), 0, True, "_ord", False) == 1.5
+    assert rows.insert_order(ords(1, 2), 1, True, "_ord", True) is rows.Order.NEEDS_MORE  # next row not loaded
+    assert rows.insert_order(ords(1, 2), 1, True, "_ord", False) == 3
+    assert rows.insert_order(ords(1, 2), 0, False, "_ord", True) == 0  # above: loaded neighbours enough
+    assert rows.insert_order(ords(None, 2), 0, True, "_ord", True) is rows.Order.LAST  # below a row without _ord
+    assert rows.insert_order(ords(None, 2), 0, False, "_ord", False) is None  # above one: left empty

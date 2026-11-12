@@ -6,6 +6,7 @@ import asyncio
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 
 from rich.text import Text
@@ -204,6 +205,16 @@ def same_rows(a: list[Page], b: list[Page]) -> bool:
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
+
+@dataclass(frozen=True)
+class NewRow:
+    """A row about to be added: next to which row (None: at the bottom) and on which side,
+    and its `_ord` column and value (a number, past the highest, or none)."""
+
+    anchor: str | None = None
+    after: bool = True
+    ord_name: str | None = None
+    ord_value: float | row_edit.Order | None = None
 
 class NotionTUI(App):
     TITLE = "notion-tui"
@@ -937,38 +948,29 @@ class NotionTUI(App):
 
     def action_row_new(self) -> None:
         """A new row at the bottom. With an `_ord` number column, its `_ord` goes past the highest one."""
-        self._start_new_row(None, {}, self._order_column())
+        name = self._order_column()
+        self._start_new_row(NewRow(ord_name=name, ord_value=row_edit.Order.LAST if name else None))
 
     def action_row_insert(self, after: bool) -> None:
-        """A new row right below (after) or above the cursor's row. With an `_ord` number column,
-        its `_ord` goes halfway between that row and its neighbour on that side; below a row with
-        no `_ord`, past the highest one."""
+        """A new row right below (after) or above the cursor's row, its `_ord` set as rows.py decides."""
         found = self._cursor_row()
         if not found:
             self.action_row_new()  # no row to put it next to
             return
         rows, row = found
-        index = rows.rows.index(row)
-        extra, last = {}, None
-        name = self._order_column()
+        name, value = self._order_column(), None
         if name:
-            value = row_edit.new_order(rows.rows, index, after, name)
-            if value is None:
-                last = name if after else None
-            elif after and index == len(rows.rows) - 1 and rows.cursor is not None:
+            value = row_edit.insert_order(rows.rows, rows.rows.index(row), after, name, rows.cursor is not None)
+            if value is row_edit.Order.NEEDS_MORE:
                 self.notify("The next row isn't loaded: press m for more rows first.", severity="warning")
                 return
-            else:
-                extra[name] = {"number": value}
-        self._start_new_row((row["id"], after), extra, last)
+        self._start_new_row(NewRow(row["id"], after, name, value))
 
     def _order_column(self) -> str | None:
         return row_edit.order_column(self.cache.schema(self.current.id) or [])
 
-    def _start_new_row(self, anchor: tuple[str, bool] | None, extra: dict, last: str | None) -> None:
-        """Open a row for a new title: at the bottom, or right after / before the anchor row
-        (its ID, and whether after it). `extra`: other property values to create it with;
-        `last`: a number column to set past its highest value, asked from Notion when the row is created."""
+    def _start_new_row(self, new: NewRow) -> None:
+        """Open a row for a new title, at the bottom or next to its anchor row."""
         grid, page = self.query_one(RowGrid), self.current
         schema = self.cache.schema(page.id) or []
         title = next((p["name"] for p in schema if p["type"] == "title"), None)
@@ -977,34 +979,33 @@ class NotionTUI(App):
         elif grid.has_row(NEW_ROW):
             self.notify("Still adding the last row.", severity="warning")
         else:
-            grid.add_new_row(title, grid.get_row_index(anchor[0]) + anchor[1] if anchor else None)
-            self.call_after_refresh(self._ask_new_title, page, title, anchor, extra, last)
+            grid.add_new_row(title, grid.get_row_index(new.anchor) + new.after if new.anchor else None)
+            self.call_after_refresh(self._ask_new_title, page, title, new)
 
-    def _ask_new_title(
-        self, page: Page, title: str, anchor: tuple[str, bool] | None, extra: dict, last: str | None
-    ) -> None:
+    def _ask_new_title(self, page: Page, title: str, new: NewRow) -> None:
         grid = self.query_one(RowGrid)
 
         def done(text: str | None) -> None:
             if text:
                 grid.set_cell(NEW_ROW, title, text)
                 grid.mark(NEW_ROW, "…")
-                self._create_row(page, text, anchor, extra, last)
+                self._create_row(page, text, new)
             else:
                 grid.drop_row(NEW_ROW)
 
         self.push_screen(CellTextScreen("", grid.cell_region(), str.strip), done)
 
     @work(group="row-write")
-    async def _create_row(
-        self, page: Page, title: str, anchor: tuple[str, bool] | None, extra: dict, last: str | None
-    ) -> None:
+    async def _create_row(self, page: Page, title: str, new: NewRow) -> None:
         grid = self.query_one(RowGrid)
         try:
             async with self._row_writes:
                 with self._busy():
-                    if last:  # all rows count, loaded or not: Notion is asked for the highest
-                        extra = extra | {last: {"number": row_edit.after_last(await ntn.highest_number(page.id, last))}}
+                    value = new.ord_value
+                    if value is row_edit.Order.LAST:  # all rows count, loaded or not: Notion is asked
+                        highest = await ntn.highest_number(page.id, new.ord_name)
+                        value = row_edit.after_last(highest)
+                    extra = {new.ord_name: {"number": value}} if value is not None else {}
                     row = await ntn.create_row(page.id, title, extra)
         except NtnError as err:
             grid.drop_row(NEW_ROW)
@@ -1015,8 +1016,8 @@ class NotionTUI(App):
             self.cache.invalidate(page.id)
             return
         grid.drop_row(NEW_ROW)
-        if anchor:
-            insert_next_to(rows.rows, row, *anchor)
+        if new.anchor:
+            insert_next_to(rows.rows, row, new.anchor, new.after)
         else:
             rows.rows.append(row)
         self._learn_people(page.id, [row])
