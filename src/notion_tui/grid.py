@@ -33,6 +33,8 @@ class RowGrid(DataTable):
         Binding("enter", "select_cursor", "edit cell"),
         Binding("space", "select_cursor", "edit cell", show=False),
         Binding("n", "app.row_new", "new row"),
+        Binding("i", "app.row_insert(True)", "insert row below"),
+        Binding("I", "app.row_insert(False)", "insert row above"),
         Binding("x", "app.row_trash", "delete row"),
         Binding("u", "app.row_restore", "undo delete"),
         Binding("e", "app.row_body", "row body"),
@@ -158,11 +160,19 @@ class RowGrid(DataTable):
         if self.has_row(row_id):
             self.move_cursor(row=self.get_row_index(row_id), animate=False)
 
-    def add_new_row(self, name: str) -> None:
-        """Add the empty row a new title is typed into and put the cursor on its title cell."""
-        self.texts[NEW_ROW] = ["" for _ in self.names]
-        self.add_row(*self._cells(NEW_ROW), key=NEW_ROW, label=" ")
-        self.move_cursor(row=self.row_count - 1, column=self.names.index(name), animate=False)
+    def add_new_row(self, name: str, index: int | None = None) -> None:
+        """Add the empty row a new title is typed into, at the bottom or at a row index,
+        and put the cursor on its title cell."""
+        blank = ["" for _ in self.names]
+        if index is None or index >= len(self.texts):
+            self.texts[NEW_ROW] = blank
+            self.add_row(*self._cells(NEW_ROW), key=NEW_ROW, label=" ")
+        else:  # a DataTable only appends: rebuild with the new row in its place
+            items = list(self.texts.items())
+            items.insert(index, (NEW_ROW, blank))
+            self.texts = dict(items)
+            self._draw()
+        self.move_cursor(row=self.get_row_index(NEW_ROW), column=self.names.index(name), animate=False)
 
     def cell_region(self) -> Region:
         """Where the cursor's cell is on the screen, for placing its editor."""

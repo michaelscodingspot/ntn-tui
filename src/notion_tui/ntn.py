@@ -243,6 +243,17 @@ async def query_rows(
     return rows, data.get("next_cursor") if data.get("has_more") else None
 
 
+async def highest_number(data_source_id: str, name: str) -> float | None:
+    """The highest value of a number column over all the database's rows; None when every row leaves it empty."""
+    rows, _ = await query_rows(
+        data_source_id,
+        filter={"property": name, "number": {"is_not_empty": True}},
+        sorts=[{"property": name, "direction": "descending"}],
+        page_size=1,
+    )
+    return rows[0]["properties"][name].get("number") if rows else None
+
+
 def value_text(prop: dict) -> str:
     """A row property as short plain text ("" when empty or not shown)."""
     kind = prop.get("type")
@@ -377,9 +388,11 @@ def _object(out: str) -> dict:
         raise NtnError(f"Unexpected `ntn api` output: {err!r}") from err
 
 
-async def create_row(data_source_id: str, title: str) -> dict:
-    """Add a row with a title to a database; returns the row as a query returns it."""
+async def create_row(data_source_id: str, title: str, properties: dict | None = None) -> dict:
+    """Add a row with a title (and other property values, {name: value}) to a database;
+    returns the row as a query returns it."""
     body = new_page_body(title, "data_source", data_source_id)
+    body["properties"] |= properties or {}
     return _object(await _run("api", "v1/pages", "-d", json.dumps(body)))
 
 

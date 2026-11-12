@@ -49,14 +49,16 @@ class FakeNotion:
         self.write_gate = None  # set: row updates wait for this event
         self.fail = False
         self.fail_queries = False  # set: row queries are refused
-        for name in ("search", "get_schema", "list_view_ids", "query_rows", "update_row", "create_row", "trash", "restore"):
+        self.schema = SCHEMA
+        self.create_gate = None  # set: row creation waits for this event
+        for name in ("search", "get_schema", "list_view_ids", "query_rows", "update_row", "create_row", "highest_number", "trash", "restore"):
             monkeypatch.setattr(ntn, name, getattr(self, name))
 
     async def search(self, query="", cursor=None, page_size=50):
         return [DB], None
 
     async def get_schema(self, data_source_id):
-        return copy.deepcopy(SCHEMA)
+        return copy.deepcopy(self.schema)
 
     async def list_view_ids(self, data_source_id):
         raise NtnError("views come from the cache here")
@@ -86,11 +88,20 @@ class FakeNotion:
             target["properties"][name][kind] = new
         return copy.deepcopy(target)
 
-    async def create_row(self, data_source_id, title):
+    async def create_row(self, data_source_id, title, properties=None):
+        if self.create_gate:
+            await self.create_gate.wait()
         self._check()
         new = row(f"new{len(self.rows)}", title)
+        for name, value in (properties or {}).items():
+            new["properties"][name] = {"type": "number", **value}
         self.rows.append(new)
         return copy.deepcopy(new)
+
+    async def highest_number(self, data_source_id, name):
+        self._check()
+        values = [r["properties"][name]["number"] for r in self.rows if name in r["properties"]]
+        return max((v for v in values if v is not None), default=None)
 
     async def trash(self, page_id):
         self._check()
@@ -108,10 +119,10 @@ def notion(monkeypatch):
     return FakeNotion(monkeypatch)
 
 
-def drive(tmp_path, script, edit=True):
+def drive(tmp_path, script, edit=True, schema=SCHEMA):
     async def run():
         cache = Cache(tmp_path / "c.db")
-        cache.put_schema("ds", SCHEMA)
+        cache.put_schema("ds", schema)
         cache.put_views("ds", VIEWS)
         cache.upsert_pages([DB])
         cache.put_db_edit_mode("ds", edit)
@@ -439,6 +450,127 @@ def test_new_row(tmp_path, notion):
         await go(app, pilot, "G", "a", "m", "m", "a", "enter")
         assert grid.row_count == 3 and notion.rows[-1]["properties"]["Name"]["title"][0]["plain_text"] == "Gamma"
         assert grid.current_row_id == notion.rows[-1]["id"]
+
+    drive(tmp_path, script)
+
+
+def test_insert_row_below_and_above(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "i")  # below Alpha, the first row
+        assert isinstance(app.screen, CellTextScreen) and grid.get_row_index("new-row") == 1
+        await go(app, pilot, "Z", "enter")
+        assert list(grid.texts) == ["a", "new2", "b"] and grid.current_row_id == "new2"
+        await go(app, pilot, "G", "I", "Y", "enter")  # above Beta, the last row
+        assert list(grid.texts) == ["a", "new2", "new3", "b"] and grid.current_row_id == "new3"
+        assert "_ord" not in notion.rows[-1]["properties"]  # no _ord column: nothing more is set
+
+    drive(tmp_path, script)
+
+
+def test_insert_row_cancelled(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "I", "escape")
+        assert list(grid.texts) == ["a", "b"] and len(notion.rows) == 2
+
+    drive(tmp_path, script)
+
+
+ORD_SCHEMA = [*SCHEMA, {"id": "ord", "name": "_ord", "type": "number", "options": []}]
+
+
+def with_ord(notion, *values):
+    notion.schema = ORD_SCHEMA
+    for r, value in zip(notion.rows, values):
+        r["properties"]["_ord"] = {"type": "number", "number": value}
+
+
+def test_insert_row_sets_ord_between_neighbours(tmp_path, notion):
+    with_ord(notion, 1, 2)
+
+    def ord_of(row_id):
+        return next(r for r in notion.rows if r["id"] == row_id)["properties"]["_ord"]["number"]
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "i", "Z", "enter")  # between Alpha (1) and Beta (2)
+        assert ord_of("new2") == 1.5
+        await go(app, pilot, "g", "I", "Y", "enter")  # above the first row
+        assert ord_of("new3") == 0
+        await go(app, pilot, "G", "i", "X", "enter")  # below the last row
+        assert ord_of("new4") == 3
+        assert list(grid.texts) == ["new3", "a", "new2", "b", "new4"]
+
+    drive(tmp_path, script, schema=ORD_SCHEMA)
+
+
+def test_new_row_goes_past_the_highest_ord(tmp_path, notion):
+    with_ord(notion, 1, 2)
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "n", "Z", "enter")
+        assert notion.rows[-1]["properties"]["_ord"]["number"] == 10
+        assert list(grid.texts) == ["a", "b", "new2"]
+
+    drive(tmp_path, script, schema=ORD_SCHEMA)
+
+
+def test_new_row_when_notion_wont_say_the_highest_ord(tmp_path, notion):
+    with_ord(notion, 1, 2)
+
+    async def script(app, pilot, grid):
+        notion.fail = True
+        await go(app, pilot, "enter", "n", "Z", "enter")
+        assert list(grid.texts) == ["a", "b"] and len(notion.rows) == 2
+
+    drive(tmp_path, script, schema=ORD_SCHEMA)
+
+
+def test_new_row_when_no_row_has_an_ord(tmp_path, notion):
+    with_ord(notion, None, None)
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "n", "Z", "enter")
+        assert notion.rows[-1]["properties"]["_ord"]["number"] == 8
+
+    drive(tmp_path, script, schema=ORD_SCHEMA)
+
+
+def test_insert_below_a_row_without_ord_goes_past_the_highest(tmp_path, notion):
+    with_ord(notion, None, 5)
+    notion.cursor = "more"  # the highest comes from Notion, not the loaded rows: no need for m
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "i", "Z", "enter")  # below Alpha, which has no _ord
+        assert notion.rows[-1]["properties"]["_ord"]["number"] == 13
+        assert list(grid.texts) == ["a", "new2", "b"]
+        await go(app, pilot, "k", "I", "Y", "enter")  # above it: no _ord is set
+        assert "_ord" not in notion.rows[-1]["properties"]
+
+    drive(tmp_path, script, schema=ORD_SCHEMA)
+
+
+def test_insert_below_the_last_loaded_row_asks_for_more_rows(tmp_path, notion):
+    with_ord(notion, 1, 2)
+    notion.cursor = "more"  # the next row's _ord isn't known
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "G", "i")
+        assert not isinstance(app.screen, CellTextScreen) and list(grid.texts) == ["a", "b"]
+        await go(app, pilot, "I", "Y", "enter")  # above it, both neighbours are loaded
+        assert list(grid.texts) == ["a", "new2", "b"]
+
+    drive(tmp_path, script, schema=ORD_SCHEMA)
+
+
+def test_inserted_row_goes_last_when_its_neighbour_was_deleted(tmp_path, notion):
+    async def script(app, pilot, grid):
+        notion.create_gate = asyncio.Event()
+        await pilot.press("enter", "i", "Z", "enter")  # below Alpha; Notion holds the create
+        await pilot.pause(0.1)
+        await pilot.press("k", "x")  # Alpha goes before the new row is back
+        await pilot.pause(0.1)
+        notion.create_gate.set()
+        await settle(app, pilot)
+        assert list(grid.texts) == ["b", "new2"]
 
     drive(tmp_path, script)
 

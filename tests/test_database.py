@@ -80,3 +80,11 @@ def test_rows_key_sees_values_order_and_edit_time():
     assert rows_key([a, b]) == rows_key([dict(a), dict(b)])
     assert rows_key([a, b]) != rows_key([b, a])
     assert rows_key([a]) != rows_key([a | {"properties": {"x": 9}}])  # same minute, new value
+
+
+def test_insert_next_to():
+    rows = [{"id": "a"}, {"id": "b"}]
+    database.insert_next_to(rows, {"id": "x"}, "a", True)
+    database.insert_next_to(rows, {"id": "y"}, "a", False)
+    database.insert_next_to(rows, {"id": "z"}, "gone", True)
+    assert [r["id"] for r in rows] == ["y", "a", "x", "b", "z"]

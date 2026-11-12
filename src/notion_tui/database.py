@@ -124,6 +124,12 @@ def find_row(rows: list[dict], row_id: str | None) -> dict | None:
     return next((row for row in rows if row["id"] == row_id), None)
 
 
+def insert_next_to(rows: list[dict], row: dict, anchor_id: str, after: bool) -> None:
+    """Put a row right after / before the row with ID anchor_id, or at the end when that row is gone."""
+    index = next((i for i, r in enumerate(rows) if r["id"] == anchor_id), None)
+    rows.insert(len(rows) if index is None else index + after, row)
+
+
 def replace_row(rows: list[dict], fresh: dict) -> None:
     """Swap in the row as Notion returned it after a change."""
     for i, row in enumerate(rows):
