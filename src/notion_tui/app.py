@@ -6,7 +6,8 @@ import asyncio
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 from rich.text import Text
 from textual import work
@@ -61,6 +62,10 @@ LOAD_MORE_MARGIN = 5  # fetch the next batch when the cursor is this close to th
 BODY_CHECKS = 2  # parallel ntn calls when checking which database entries have content
 VIEW_FETCHES = 2  # parallel ntn calls when fetching a database's views
 SAVED_MARK_SECONDS = 1.5  # how long a grid row shows ✓ after a save
+WATCH_SECONDS = 60  # how often the focused page is checked for changes made elsewhere
+RECENT_EDIT = timedelta(minutes=2)  # Notion's edit time has minute steps: content edited this recently is compared too
+# Work that changes the focused page here, or a fetch of it already on its way: the check waits for the next minute.
+WATCH_BLOCKERS = {"edit", "row-write", "create", "trash", "preview", "dbmeta"}
 LEAVE_ALT_SCREEN = "\x1b[?1049l"  # terminal code that switches back to the shell's screen
 
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
@@ -201,6 +206,22 @@ def same_rows(a: list[Page], b: list[Page]) -> bool:
     return len(a) == len(b) and all(key(x) == key(y) for x, y in zip(a, b))
 
 
+def edited_recently(last_edited: str, now: datetime) -> bool:
+    """True when the edit time is so close to now that a later edit in the same minute would not move it."""
+    try:
+        edited = datetime.fromisoformat(last_edited)
+    except ValueError:
+        return True  # unknown: compare the content
+    if edited.tzinfo is None:
+        edited = edited.replace(tzinfo=timezone.utc)
+    return now - edited < RECENT_EDIT
+
+
+def rows_key(rows: list[dict]) -> list[tuple]:
+    """What a change to rows shows in: order, edit time and values (two edits in one minute share an edit time)."""
+    return [(r.get("id"), r.get("last_edited_time"), r.get("properties")) for r in rows]
+
+
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
@@ -318,6 +339,7 @@ class NotionTUI(App):
             await self._show_pages(cached)
         self.load_list("")
         self.run_worker(asyncio.to_thread(desktop.prune_files), group="prune")
+        self.set_interval(WATCH_SECONDS, self._watch_current)
 
     # ---------- list ----------
 
@@ -688,6 +710,71 @@ class NotionTUI(App):
         """Keep the preview for instant display, unless it shows a layout picked with `t`: those aren't saved."""
         if not self._custom_layout(page):
             self.cache.put_content(page, markdown)
+
+    # ---------- staleness watch ----------
+
+    def _watch_paused(self) -> bool:
+        """A dialog is open, or a change or fetch of the page is running: a refresh now would get in its way."""
+        if len(self.screen_stack) > 1:
+            return True
+        return any(w.group in WATCH_BLOCKERS and not w.is_finished for w in self.workers)
+
+    def _watch_current(self) -> None:
+        if self.current is not None and not self._watch_paused():
+            self.check_current(self.current)
+
+    @work(exclusive=True, group="watch")
+    async def check_current(self, page: Page) -> None:
+        """Once a minute: refresh the focused page's preview, or its database rows, when Notion has newer ones."""
+        try:
+            if page.kind == "data_source":
+                await self._check_rows(page)
+            else:
+                await self._check_page(page)
+        except NtnError:
+            pass  # a passing error: the next minute tries again
+
+    def _still_current(self, page: Page) -> bool:
+        return self.current is not None and self.current.id == page.id and not self._watch_paused()
+
+    async def _check_page(self, page: Page) -> None:
+        fresh = await ntn.get_page(page.id)
+        cached = self.cache.content(page.id)
+        unchanged = fresh.last_edited == page.last_edited and cached is not None and cached[1] == page.last_edited
+        if unchanged and not edited_recently(fresh.last_edited, datetime.now(timezone.utc)):
+            return
+        markdown = await ntn.get_markdown(page.id)
+        if not self._still_current(page):
+            return
+        page = self._with_edit_time(page, fresh.last_edited)
+        self.cache.put_content(page, markdown)
+        if cached is None or cached[0] != markdown:
+            await self._render_page(page, markdown)  # same page: the scroll position stays
+
+    def _with_edit_time(self, page: Page, last_edited: str) -> Page:
+        """Give the focused page its new edit time, in the list and the cache too."""
+        if page.last_edited == last_edited:
+            return page
+        newer = replace(page, last_edited=last_edited)
+        self.cache.upsert_pages([newer])
+        self.loaded = [newer if p.id == page.id else p for p in self.loaded]
+        self.shown = [newer if p.id == page.id else p for p in self.shown]
+        for item in self.query_one(PageList).query(PageItem):
+            if item.page.id == page.id:
+                item.page = newer
+        self.current = newer
+        return newer
+
+    async def _check_rows(self, page: Page) -> None:
+        rows = self._current_rows()
+        if rows is None or rows.reloading:
+            return
+        fresh, cursor = await ntn.query_rows(page.id, rows.filter, rows.sorts)
+        if not self._still_current(page) or self.db_rows is not rows or rows.reloading:
+            return
+        shown = rows.rows if cursor is None else rows.rows[: len(fresh)]  # rows paged in later aren't compared
+        if rows_key(fresh) != rows_key(shown):
+            self._reload_db()
 
     @work(exclusive=True, group="dbmeta")
     async def refresh_db_meta(self, page: Page) -> None:

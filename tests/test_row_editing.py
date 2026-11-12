@@ -695,3 +695,17 @@ def test_more_rows_than_fit_still_fill_the_width_without_scrolling_sideways(tmp_
         assert hebrew.startswith("…") and "שלום" in hebrew  # cut at its logical end, shown on the left
 
     drive(tmp_path, script)
+
+
+def test_rows_changed_elsewhere_refresh_within_a_minute(tmp_path, notion):
+    async def script(app, pilot, grid):
+        queries = notion.queries
+        app._watch_current()
+        await settle(app, pilot)
+        assert notion.queries == queries + 1  # unchanged rows: one look, no reload
+        notion.rows[0]["properties"]["Name"]["title"] = [{"plain_text": "Alef"}]
+        app._watch_current()
+        await settle(app, pilot)
+        assert cell(grid, "a", "Name") == "Alef"
+
+    drive(tmp_path, script)
