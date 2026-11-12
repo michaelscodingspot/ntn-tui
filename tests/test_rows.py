@@ -137,3 +137,28 @@ def test_edit_mode_column_is_added_to_old_caches(tmp_path):
     cache = Cache(path)
     assert not cache.db_edit_mode("ds")
     assert cache.db_state("ds") == ("v1", "", None)
+
+
+def test_order_moves_swap_two_values():
+    assert rows.order_moves([1, 2, 3.5], 1, 1) == {1: 3.5, 2: 2}
+    assert rows.order_moves([1, 2, 3.5], 1, -1) == {0: 2, 1: 1}
+
+
+def test_order_moves_stop_at_the_edges():
+    assert rows.order_moves([1, 2], 0, -1) is None
+    assert rows.order_moves([1, 2], 1, 1) is None
+
+
+def test_order_moves_split_equal_values():
+    assert rows.order_moves([1, 3, 3, 4], 1, 1) == {2: 3, 1: 3.5}  # the lower row goes on top, the other between 3 and 4
+    assert rows.order_moves([3, 3], 0, 1) == {1: 3, 0: 4}
+
+
+def test_order_moves_give_empty_values_numbers():
+    assert rows.order_moves([1, 5, None], 1, 1) == {2: 5, 1: 6}  # empty sorts last
+    assert rows.order_moves([1, 5, None, None], 3, -1) == {3: 6, 2: 7}
+
+
+def test_order_moves_descending():
+    assert rows.order_moves([5, 3, 1], 0, 1, descending=True) == {0: 3, 1: 5}
+    assert rows.order_moves([5, 3, 3], 1, 1, descending=True) == {2: 3, 1: 2}

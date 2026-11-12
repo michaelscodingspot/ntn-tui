@@ -278,6 +278,7 @@ class NotionTUI(App):
         self._search_timer: Timer | None = None
         self.db_rows: DbRows | None = None  # rows of the database being previewed
         self._row_writes = asyncio.Lock()  # row changes reach Notion one at a time, in the order made
+        self._order_writes: dict[str, int] = {}  # row → `_ord` saves still on their way
         self._trashed: dict[str, list[tuple[dict, int]]] = {}  # data source → rows deleted here and where they were
         self._query_from_grid = False  # the filter line was opened from the grid: go back there
         self._layouts: dict[str, str] = {}  # view → layout picked with `t`; not saved, gone at quit
@@ -1045,6 +1046,77 @@ class NotionTUI(App):
             return
         self.notify(f"Restored “{ntn.row_title(row)}”.")
 
+    def _order_column(self) -> dict | None:
+        """The current database's `_ord` number column, which `alt+j` / `alt+k` reorder rows by."""
+        schema = self.cache.schema(self.current.id) if self._is_db() else None
+        return next((p for p in schema or [] if p["name"] == row_edit.ORDER and p["type"] == "number"), None)
+
+    async def action_row_move(self, step: int) -> None:
+        """Move the row under the cursor one place up or down by changing `_ord`; the cursor goes with it."""
+        found, column, grid = self._cursor_row(), self._order_column(), self.query_one(RowGrid)
+        if not found or column is None:
+            return
+        if grid.has_row(NEW_ROW):
+            self.notify("Still adding the last row.", severity="warning")
+            return
+        sorts = self._db_request(self.current.id).sorts or []
+        if not sorts or sorts[0].get("property") not in (column["id"], column["name"]):
+            self.notify(f"Moving rows works when they are sorted by {row_edit.ORDER} first.", severity="warning")
+            return
+        rows, row = found
+        index = rows.rows.index(row)
+        values = [r["properties"].get(row_edit.ORDER, {}).get("number") for r in rows.rows]
+        moves = row_edit.order_moves(values, index, step, sorts[0].get("direction") == "descending")
+        if moves is None:
+            return
+        changes = []
+        for i, value in moves.items():
+            moved = rows.rows[i]
+            moved["properties"].setdefault(row_edit.ORDER, {"type": "number"})["number"] = value
+            changes.append((moved["id"], value))
+        rows.rows[index], rows.rows[index + step] = rows.rows[index + step], rows.rows[index]
+        grid.show(rows.rows, grid.names)  # keeps the cursor on the moved row
+        for row_id, _ in changes:
+            self._order_writes[row_id] = self._order_writes.get(row_id, 0) + 1
+            grid.mark(row_id, "…")
+        self._write_order(self.current, changes)
+        await self._store_rows(self.current, rows)
+
+    @work(group="row-write")
+    async def _write_order(self, page: Page, changes: list[tuple[str, int | float]]) -> None:
+        """Save new `_ord` values. The rows keep the values set here, not Notion's reply: a later move
+        may have changed them again already."""
+        grid = self.query_one(RowGrid)
+        try:
+            async with self._row_writes:
+                with self._busy():
+                    for row_id, value in changes:
+                        await ntn.update_row(row_id, {row_edit.ORDER: {"number": value}})
+        except NtnError as err:
+            for row_id in self._order_writes:  # the reload below brings Notion's order back
+                grid.mark(row_id, " ")
+            self._order_writes.clear()
+            self.notify(str(err), title="Could not move the row", severity="error")
+            if self._rows_of(page):
+                self._reload_db()
+            else:
+                self.cache.invalidate(page.id)
+            return
+        done = []
+        for row_id, _ in changes:
+            left = self._order_writes.get(row_id, 1) - 1
+            if left > 0:
+                self._order_writes[row_id] = left  # moved again: the last save sets the mark
+            else:
+                self._order_writes.pop(row_id, None)
+                done.append(row_id)
+        if self._rows_of(page) is None:
+            self.cache.invalidate(page.id)
+            return
+        for row_id in done:
+            grid.mark(row_id, "✓")
+            self.set_timer(SAVED_MARK_SECONDS, lambda row_id=row_id: grid.mark(row_id, " "))
+
     def action_row_body(self) -> None:
         found = self._cursor_row()
         if found:
@@ -1110,6 +1182,8 @@ class NotionTUI(App):
                 return bool(rows and rows.cursor)
             if action == "db_layout":
                 return can_switch_layout(self._db_request(self.current.id).view) and not self._editing_rows()
+        if action == "row_move":
+            return self._order_column() is not None
         if action == "focus_grid":
             return self._is_db() and self.query_one(RowGrid).display
         if action == "links":

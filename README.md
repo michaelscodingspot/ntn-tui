@@ -111,6 +111,7 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | `n`                 | new row: type its title                             |
 | `x`                 | delete the row, to Notion's trash, without asking   |
 | `u`                 | bring back the last deleted row (several in a row work) |
+| `alt+j` / `alt+k`, `alt+↓` / `alt+↑` | move the row down / up (databases with an `_ord` column, below) |
 | `e`                 | edit the row's body in `$EDITOR`                    |
 | `ctrl+o`            | Claude Code session on the cell in herdr (below)    |
 | `y` / `ctrl+c`      | copy the cell's full value to the clipboard         |
@@ -129,6 +130,12 @@ sends, `esc` cancels), and starts Claude Code in herdr with it:
 
 Claude asks whether to trust a new worktree folder; herdr's kitty window comes forward to answer
 it, and the task is sent once Claude is ready.
+
+`alt+j` / `alt+k` reorder rows in a database with a number column named `_ord`, when the rows are
+sorted by `_ord` first (ascending or descending). The row and its neighbour swap `_ord` values; when
+the two are equal or empty, they get new values that keep them in the new order (an equal pair: the
+lower one between its neighbours' values; an empty one: the last value + 1). The cursor stays on the
+moved row. A failed save brings back Notion's order.
 
 Each change is saved to Notion at once: `…` in the row's gutter while saving, `✓` when done.
 If Notion refuses, the old value comes back with a message. A row changed so it no longer

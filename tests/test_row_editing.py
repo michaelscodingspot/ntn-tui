@@ -41,6 +41,7 @@ def row(id, name):
 class FakeNotion:
     def __init__(self, monkeypatch):
         self.rows = [row("a", "Alpha"), row("b", "Beta")]
+        self.schema = SCHEMA
         self.trashed = {}
         self.calls = []
         self.queries = 0
@@ -55,7 +56,7 @@ class FakeNotion:
         return [DB], None
 
     async def get_schema(self, data_source_id):
-        return copy.deepcopy(SCHEMA)
+        return copy.deepcopy(self.schema)
 
     async def list_view_ids(self, data_source_id):
         raise NtnError("views come from the cache here")
@@ -105,11 +106,11 @@ def notion(monkeypatch):
     return FakeNotion(monkeypatch)
 
 
-def drive(tmp_path, script, edit=True):
+def drive(tmp_path, script, edit=True, schema=SCHEMA, views=VIEWS):
     async def run():
         cache = Cache(tmp_path / "c.db")
-        cache.put_schema("ds", SCHEMA)
-        cache.put_views("ds", VIEWS)
+        cache.put_schema("ds", schema)
+        cache.put_views("ds", views)
         cache.upsert_pages([DB])
         cache.put_db_edit_mode("ds", edit)
         app = NotionTUI(cache, Options())
@@ -695,3 +696,67 @@ def test_more_rows_than_fit_still_fill_the_width_without_scrolling_sideways(tmp_
         assert hebrew.startswith("…") and "שלום" in hebrew  # cut at its logical end, shown on the left
 
     drive(tmp_path, script)
+
+
+ORDERED_SCHEMA = SCHEMA + [{"id": "ord", "name": "_ord", "type": "number", "options": []}]
+ORDERED_VIEWS = [View("v1", "Shelf", "list", None, [{"property": "ord", "direction": "ascending"}], None)]
+
+
+def ordered(notion, values):
+    """Rows a, b, c, … with these `_ord` values, as Notion would list them sorted by `_ord`."""
+    notion.schema = ORDERED_SCHEMA
+    notion.rows = [row(chr(ord("a") + i), f"Row {i}") for i in range(len(values))]
+    for r, value in zip(notion.rows, values):
+        r["properties"]["_ord"] = {"type": "number", "number": value}
+
+
+def order_of(app):
+    return [(r["id"], r["properties"]["_ord"]["number"]) for r in app.db_rows.rows]
+
+
+@pytest.mark.parametrize("down, up", [("alt+j", "alt+k"), ("alt+down", "alt+up")])
+def test_alt_keys_move_a_row_and_the_cursor_stays_on_it(tmp_path, notion, down, up):
+    ordered(notion, [1, 2, 3])
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", down)
+        assert list(grid.texts) == ["b", "a", "c"] and grid.current_row_id == "a"
+        assert order_of(app) == [("b", 1), ("a", 2), ("c", 3)]
+        assert sorted(notion.calls) == [("a", {"_ord": {"number": 2}}), ("b", {"_ord": {"number": 1}})]
+        await go(app, pilot, down, up)
+        assert list(grid.texts) == ["b", "a", "c"] and grid.current_row_id == "a"
+        assert app.cache.content("ds")[0].index("Row 1") < app.cache.content("ds")[0].index("Row 0")
+
+    drive(tmp_path, script, schema=ORDERED_SCHEMA, views=ORDERED_VIEWS)
+
+
+def test_moving_past_an_empty_order_numbers_both_rows(tmp_path, notion):
+    ordered(notion, [1, None])
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "alt+j")
+        assert order_of(app) == [("b", 1), ("a", 2)] and grid.current_row_id == "a"
+
+    drive(tmp_path, script, schema=ORDERED_SCHEMA, views=ORDERED_VIEWS)
+
+
+def test_rows_not_sorted_by_order_stay_put(tmp_path, notion):
+    ordered(notion, [1, 2])
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "alt+j")
+        assert list(grid.texts) == ["a", "b"] and notion.calls == []
+
+    drive(tmp_path, script, schema=ORDERED_SCHEMA)
+
+
+def test_failed_move_brings_back_notions_order(tmp_path, notion):
+    ordered(notion, [1, 2])
+
+    async def script(app, pilot, grid):
+        notion.fail = True
+        await go(app, pilot, "enter", "alt+j")
+        await settle(app, pilot)
+        assert list(grid.texts) == ["a", "b"] and str(grid.rows["a"].label) == " "
+
+    drive(tmp_path, script, schema=ORDERED_SCHEMA, views=ORDERED_VIEWS)

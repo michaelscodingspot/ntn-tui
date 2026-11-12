@@ -149,3 +149,31 @@ def check_option(name: str) -> str:
     if "," in name:
         raise ValueError("Option names can't contain a comma.")
     return name
+
+
+ORDER = "_ord"  # a number column whose ascending (or descending) sort is the order the user keeps by hand
+
+
+def _tidy(number: float) -> int | float:
+    return int(number) if float(number).is_integer() else number
+
+
+def order_moves(values: list[float | None], index: int, step: int, descending: bool = False) -> dict[int, int | float] | None:
+    """New order values ({row index: value}) that move the row at `index` one place up (step -1) or
+    down (step 1), in rows sorted by those values; None at the edge. Two different values swap;
+    equal or empty ones (empty sorts last) get values that put the pair in the new order."""
+    other = index + step
+    if not 0 <= other < len(values):
+        return None
+    if descending:  # mirrored: work on the negated values, which go up as the rows go down
+        moves = order_moves([None if v is None else -v for v in values], index, step)
+        return {i: _tidy(-v) for i, v in moves.items()}
+    top, bottom = min(index, other), max(index, other)
+    above, below = values[top], values[bottom]
+    if above is not None and below is not None and above != below:
+        return {top: _tidy(below), bottom: _tidy(above)}
+    known = [v for v in (above, below) if v is not None]
+    first = known[0] if known else max((v for v in values[:top] if v is not None), default=0) + 1
+    after = next((v for v in values[bottom + 1:] if v is not None and v > first), None)
+    second = (first + after) / 2 if after is not None else first + 1
+    return {bottom: _tidy(first), top: _tidy(second)}  # the lower row goes on top
