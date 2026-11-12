@@ -1,4 +1,6 @@
-from notion_tui.app import same_rows, vanished, with_cached_tail
+from datetime import datetime, timezone
+
+from notion_tui.app import edited_recently, same_rows, vanished, with_cached_tail
 from notion_tui.ntn import Page
 
 
@@ -43,3 +45,10 @@ def test_rows_differ_on_order_length_or_edit_time():
     assert not same_rows([a, b], [b, a])
     assert not same_rows([a, b], [a])
     assert not same_rows([a], [page("a", "2026-01-03")])
+
+
+def test_edited_recently_within_two_minutes():
+    now = datetime(2026, 11, 12, 10, 5, tzinfo=timezone.utc)
+    assert edited_recently("2026-11-12T10:04:00.000Z", now)
+    assert not edited_recently("2026-11-12T10:02:00.000Z", now)
+    assert edited_recently("", now)  # unknown: compare the content
