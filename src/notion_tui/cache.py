@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS db_state (
     query_text     TEXT NOT NULL DEFAULT '',
     sorts_json     TEXT            -- NULL = the view's sorts
     -- edit_mode   INTEGER: 1 = rows open in the Edit grid (added by migration)
-    -- wrap_rows   INTEGER: 1 = the Edit grid wraps its rows, `z` (added by migration)
+    -- expand_row  INTEGER: 1 = the Edit grid shows the cursor's row wrapped, `z` (added by migration)
 );
 """
 
@@ -96,8 +96,8 @@ class Cache:
             state_columns = {row[1] for row in self.db.execute("PRAGMA table_info(db_state)")}
             if "edit_mode" not in state_columns:
                 self.db.execute("ALTER TABLE db_state ADD COLUMN edit_mode INTEGER NOT NULL DEFAULT 0")
-            if "wrap_rows" not in state_columns:
-                self.db.execute("ALTER TABLE db_state ADD COLUMN wrap_rows INTEGER NOT NULL DEFAULT 0")
+            if "expand_row" not in state_columns:
+                self.db.execute("ALTER TABLE db_state ADD COLUMN expand_row INTEGER NOT NULL DEFAULT 0")
 
     def recent_pages(self, limit: int = 200) -> list[Page]:
         rows = self.db.execute(
@@ -274,16 +274,16 @@ class Cache:
                 (data_source_id, int(on)),
             )
 
-    def db_wrap_rows(self, data_source_id: str) -> bool:
-        """Whether the database's Edit grid wraps its rows."""
-        row = self.db.execute("SELECT wrap_rows FROM db_state WHERE data_source_id = ?", (data_source_id,)).fetchone()
+    def db_expand_row(self, data_source_id: str) -> bool:
+        """Whether the database's Edit grid shows the cursor's row wrapped."""
+        row = self.db.execute("SELECT expand_row FROM db_state WHERE data_source_id = ?", (data_source_id,)).fetchone()
         return bool(row and row[0])
 
-    def put_db_wrap_rows(self, data_source_id: str, on: bool) -> None:
+    def put_db_expand_row(self, data_source_id: str, on: bool) -> None:
         with self.db:
             self.db.execute(
-                "INSERT INTO db_state (data_source_id, wrap_rows) VALUES (?, ?) "
-                "ON CONFLICT(data_source_id) DO UPDATE SET wrap_rows=excluded.wrap_rows",
+                "INSERT INTO db_state (data_source_id, expand_row) VALUES (?, ?) "
+                "ON CONFLICT(data_source_id) DO UPDATE SET expand_row=excluded.expand_row",
                 (data_source_id, int(on)),
             )
 

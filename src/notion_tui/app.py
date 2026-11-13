@@ -885,7 +885,7 @@ class NotionTUI(App):
             loaded = self._current_rows()
             rows = loaded.rows if loaded else grid.source or []
             names = grid_columns(req.schema, req.columns)
-            wrap = self.cache.db_wrap_rows(self.current.id)
+            wrap = self.cache.db_expand_row(self.current.id)
             if grid.stale(rows, names):
                 grid.wrap = wrap  # drawn once, with this database's rows
                 grid.show(rows, names)
@@ -1017,10 +1017,10 @@ class NotionTUI(App):
             return
         self._save_cell(row["id"], name, *change)
 
-    def action_db_wrap(self) -> None:
-        """`z` in the grid: wrap the rows' cells, or back to one line per row; kept per database."""
-        on = not self.cache.db_wrap_rows(self.current.id)
-        self.cache.put_db_wrap_rows(self.current.id, on)
+    def action_db_expand(self) -> None:
+        """`z` in the grid: show the cursor's row wrapped, or back to one line per row; kept per database."""
+        on = not self.cache.db_expand_row(self.current.id)
+        self.cache.put_db_expand_row(self.current.id, on)
         self.query_one(RowGrid).set_wrap(on)
 
     def _edit_pick_cell(self, row_id: str, name: str, kind: str, prop: dict, multi: bool) -> None:

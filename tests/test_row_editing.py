@@ -982,29 +982,35 @@ async def to_notes(app, pilot, grid):
     await settle(app, pilot)
 
 
-def test_z_wraps_the_rows_and_is_remembered(tmp_path, notion):
+def test_z_expands_only_the_cursor_row_and_is_remembered(tmp_path, notion):
     with_notes(notion)
+    notion.rows[1]["properties"]["Notes"]["rich_text"] = [{"plain_text": "one\ntwo"}]
 
     async def script(app, pilot, grid):
         await go(app, pilot, "enter")
-        assert grid.rows["a"].height == 1
-        assert cell(grid, "a", "Notes") == "Goals: - ship grid editing - multi-line cells"
+        assert grid.rows["a"].height == grid.rows["b"].height == 1
+        notes = cell(grid, "a", "Notes")
+        assert notes.startswith("Goals: ") and notes.endswith("⏬") and "ship" not in notes  # first line + mark
         await go(app, pilot, "z")
         assert grid.rows["a"].height == 3 and grid.rows["b"].height == 1
-        assert cell(grid, "a", "Notes") == NOTES
-        assert app.cache.db_wrap_rows("ds")
+        assert cell(grid, "a", "Notes").split("\n") == ["Goals:", "- ship grid editing", "- multi-line cells"]
+        assert cell(grid, "b", "Notes").rstrip(" ⏬") == "one"
+        assert app.cache.db_expand_row("ds")
+        await go(app, pilot, "j")  # the expanded row follows the cursor
+        assert grid.rows["a"].height == 1 and grid.rows["b"].height == 2
+        assert cell(grid, "b", "Notes").split("\n") == ["one", "two"]
         await go(app, pilot, "z")
-        assert grid.rows["a"].height == 1 and not app.cache.db_wrap_rows("ds")
+        assert grid.rows["b"].height == 1 and not app.cache.db_expand_row("ds")
 
     drive(tmp_path, script, schema=NOTES_SCHEMA)
 
 
-def test_wrapped_rows_come_back_wrapped(tmp_path, notion):
+def test_expanded_row_comes_back(tmp_path, notion):
     with_notes(notion)
-    Cache(tmp_path / "c.db").put_db_wrap_rows("ds", True)
+    Cache(tmp_path / "c.db").put_db_expand_row("ds", True)
 
     async def script(app, pilot, grid):
-        assert grid.wrap and grid.rows["a"].height == 3
+        assert grid.wrap and grid.rows["a"].height == 3 and grid.rows["b"].height == 1
 
     drive(tmp_path, script, schema=NOTES_SCHEMA)
 
@@ -1014,7 +1020,7 @@ def test_text_cell_edits_across_lines(tmp_path, notion):
 
     async def script(app, pilot, grid):
         await to_notes(app, pilot, grid)
-        await go(app, pilot, "z", "enter")  # wrapped rows grow with the saved text
+        await go(app, pilot, "z", "enter")  # the expanded row grows with the saved text
         box = app.screen.query_one(TextArea)
         assert box.text == NOTES and box.size.height == 3
         await go(app, pilot, "shift+enter", "x", "ctrl+j", "y")

@@ -45,11 +45,11 @@ def test_forget_database_drops_its_rows_and_data_source_state(tmp_path):
     assert cache.db_state("ds") == (None, "", None)
 
 
-def test_wrap_rows_is_kept_per_database_next_to_edit_mode(tmp_path):
+def test_expand_row_is_kept_per_database_next_to_edit_mode(tmp_path):
     cache = Cache(tmp_path / "cache.db")
-    assert not cache.db_wrap_rows("ds")
+    assert not cache.db_expand_row("ds")
     cache.put_db_edit_mode("ds", True)
-    cache.put_db_wrap_rows("ds", True)
-    assert cache.db_wrap_rows("ds") and cache.db_edit_mode("ds") and not cache.db_wrap_rows("other")
-    cache.put_db_wrap_rows("ds", False)
-    assert not cache.db_wrap_rows("ds") and cache.db_edit_mode("ds")
+    cache.put_db_expand_row("ds", True)
+    assert cache.db_expand_row("ds") and cache.db_edit_mode("ds") and not cache.db_expand_row("other")
+    cache.put_db_expand_row("ds", False)
+    assert not cache.db_expand_row("ds") and cache.db_edit_mode("ds")

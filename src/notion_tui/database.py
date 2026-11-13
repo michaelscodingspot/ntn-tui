@@ -123,18 +123,29 @@ def column_widths(natural: list[int], room: int) -> list[int]:
 
 
 WRAPPED_ROW_LINES = 10  # most lines a row shows when the grid wraps its rows
+MORE_LINES = "⏬"  # ends a grid cell that has more lines than it shows; a long line is cut with "…"
 
 
 def natural_width(text: str, wrap: bool) -> int:
-    """Cells a grid cell's text wants: its longest line when rows wrap, otherwise all of it on one line."""
+    """Cells a grid cell's text wants: its longest line when rows wrap, otherwise its first line,
+    and the more-lines mark when there are others."""
+    lines = text.split("\n")
     if wrap:
-        return max(map(cell_len, text.split("\n")))
-    return cell_len(text.replace("\n", " "))
+        return max(map(cell_len, lines))
+    return cell_len(lines[0]) + (1 + cell_len(MORE_LINES) if len(lines) > 1 else 0)
+
+
+def with_more_mark(line: str, width: int | None) -> str:
+    """A line ending in the more-lines mark: at the column's right edge, the line cut to make room."""
+    if width is None:
+        return f"{line} {MORE_LINES}"
+    return set_cell_size(line, max(width - cell_len(MORE_LINES), 0)) + MORE_LINES
 
 
 def wrap_lines(text: str, width: int, most: int = WRAPPED_ROW_LINES) -> list[str]:
     """A cell's text as lines of at most `width` cells: Notion's line breaks kept, words wrapped,
-    a word longer than the width broken. Past `most` lines the last kept one ends with "…"."""
+    a word longer than the width broken. Past `most` lines the last kept one ends with the
+    more-lines mark."""
     width = max(width, 1)
     lines: list[str] = []
     for paragraph in text.split("\n"):
@@ -153,8 +164,7 @@ def wrap_lines(text: str, width: int, most: int = WRAPPED_ROW_LINES) -> list[str
                 line = line[len(head):]
         lines.append(line)
     if len(lines) > most:
-        last = lines[most - 1]
-        lines = lines[:most - 1] + [(set_cell_size(last, width - 1) if cell_len(last) >= width else last) + "…"]
+        lines = lines[:most - 1] + [with_more_mark(lines[most - 1], width)]
     return lines
 
 

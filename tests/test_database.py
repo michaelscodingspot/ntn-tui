@@ -91,12 +91,15 @@ def test_insert_next_to():
 
 
 def test_wrap_lines_keeps_breaks_wraps_words_and_caps():
-    from notion_tui.database import natural_width, wrap_lines
+    from notion_tui.database import natural_width, with_more_mark, wrap_lines
+    assert with_more_mark("Goals:", 10) == "Goals:  ⏬" and with_more_mark("Goals:", None) == "Goals: ⏬"
+    assert with_more_mark("abcdefgh", 6) == "abcd⏬"
     assert wrap_lines("Goals:\n- ship it", 20) == ["Goals:", "- ship it"]
     assert wrap_lines("one two three four", 9) == ["one two", "three", "four"]
     assert wrap_lines("abcdefghij", 4) == ["abcd", "efgh", "ij"]
     assert wrap_lines("", 5) == [""]
-    assert wrap_lines("\n".join("abcdef"), 4, most=3) == ["a", "b", "c…"]
-    assert wrap_lines("\n".join(["abcd"] * 3), 4, most=2) == ["abcd", "abc…"]
+    assert wrap_lines("\n".join("abcdef"), 4, most=3) == ["a", "b", "c ⏬"]  # the mark at the right edge
+    assert wrap_lines("\n".join(["abcd"] * 3), 4, most=2) == ["abcd", "ab⏬"]
     assert natural_width("ab\nabcd", wrap=True) == 4
-    assert natural_width("ab\nabcd", wrap=False) == 7
+    assert natural_width("ab\nabcd", wrap=False) == 5  # first line, a space, the two-cell mark
+    assert natural_width("ab cd", wrap=False) == 5
