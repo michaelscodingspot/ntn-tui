@@ -72,6 +72,12 @@ CREATE TABLE IF NOT EXISTS db_state (
     sorts_json     TEXT            -- NULL = the view's sorts
     -- edit_mode   INTEGER: 1 = rows open in the Edit grid (added by migration)
 );
+
+-- Pages and databases pinned to the top of the list, in the order they were pinned.
+CREATE TABLE IF NOT EXISTS pinned (
+    page_id   TEXT PRIMARY KEY,
+    pinned_at REAL NOT NULL
+);
 """
 
 
@@ -102,6 +108,21 @@ class Cache:
             (limit,),
         )
         return [Page(*row) for row in rows]
+
+    def pinned_pages(self) -> list[Page]:
+        """Pinned pages that are still cached, first pinned first."""
+        rows = self.db.execute(
+            "SELECT p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), p.kind "
+            "FROM pinned x JOIN pages p ON p.id = x.page_id LEFT JOIN nodes n ON n.id = p.id ORDER BY x.pinned_at"
+        )
+        return [Page(*row) for row in rows]
+
+    def set_pinned(self, page_id: str, on: bool) -> None:
+        with self.db:
+            if on:
+                self.db.execute("INSERT OR IGNORE INTO pinned (page_id, pinned_at) VALUES (?, ?)", (page_id, time.time()))
+            else:
+                self.db.execute("DELETE FROM pinned WHERE page_id = ?", (page_id,))
 
     def find_page(self, notion_id: str) -> Page | None:
         """The listed page or database a Notion link points at (ID as 32 hex digits). A database's
@@ -195,6 +216,7 @@ class Cache:
             self.db.execute("DELETE FROM page_content WHERE page_id = ?", (page_id,))
             self.db.execute("DELETE FROM pages WHERE id = ?", (page_id,))
             self.db.execute("DELETE FROM nodes WHERE id = ?", (page_id,))
+            self.db.execute("DELETE FROM pinned WHERE page_id = ?", (page_id,))
             for table in ("views", "data_source_schema", "db_state"):
                 self.db.execute(f"DELETE FROM {table} WHERE data_source_id = ?", (page_id,))
 

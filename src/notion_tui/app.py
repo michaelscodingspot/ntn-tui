@@ -112,14 +112,21 @@ class TitleLabel(BidiMixin, Label):
     """A page title in the list; RTL words reordered for kitty."""
 
 
+PIN = "📌 "  # marks a pinned page in the list
+
+
 class PageItem(ListItem):
-    def __init__(self, page: Page) -> None:
+    def __init__(self, page: Page, pinned: bool = False) -> None:
         super().__init__()
         self.page = page
+        self.pinned = pinned
+
+    def label(self) -> str:
+        marker = "▦ " if self.page.kind == "data_source" else ""
+        return (PIN if self.pinned else "") + marker + self.page.title
 
     def compose(self) -> ComposeResult:
-        marker = "▦ " if self.page.kind == "data_source" else ""
-        yield TitleLabel(marker + self.page.title, classes="title", markup=False)
+        yield TitleLabel(self.label(), classes="title", markup=False)
 
 
 class Breadcrumb(BidiMixin, Widget):
@@ -200,6 +207,15 @@ def vanished(fresh: list[Page], cached: list[Page], complete: bool) -> list[Page
     return [p for p in cached if p.id not in ids and p.last_edited > oldest]
 
 
+def pinned_first(visible: list[Page], loaded: list[Page], pinned: list[Page], recent: bool) -> list[Page]:
+    """The list with pinned pages on top, in pin order. The recent list shows every pinned page;
+    a search shows only the pinned pages it found. A page's fresher copy in `loaded` wins."""
+    fresh = {p.id: p for p in loaded}
+    top = [fresh.get(p.id, p) for p in pinned if recent or p.id in fresh]
+    ids = {p.id for p in top}
+    return top + [p for p in visible if p.id not in ids]
+
+
 def same_rows(a: list[Page], b: list[Page]) -> bool:
     """Both lists would draw the same rows: same pages, titles, kinds and edit times, in the same order."""
     def key(p: Page) -> tuple[str, str, str, str]:
@@ -265,6 +281,7 @@ class NotionTUI(App):
         Binding("e", "edit", "edit"),
         Binding("n", "new", "new"),
         Binding("x", "trash", "delete"),
+        Binding("p", "pin", "pin/unpin"),
         Binding("o", "browser", "open in Notion"),
         Binding("l", "links", "links"),
         Binding("backspace", "link_back", "back to linking page"),
@@ -289,6 +306,8 @@ class NotionTUI(App):
         self.options = options or Options.load()
         self.loaded: list[Page] = []  # pages fetched for the current list, before the options filter
         self.shown: list[Page] = []  # pages currently in the list, in order
+        self.pinned: set[str] = set()  # IDs of the pinned pages drawn in the list
+        self._at_start = True  # the first recent list from Notion has not come in yet
         self.current: Page | None = None  # highlighted page
         self.query_text = ""  # active search ("" = recent pages)
         self.next_cursor: str | None = None  # Notion cursor for the next batch of the current list
@@ -394,8 +413,10 @@ class NotionTUI(App):
 
     async def _render_list(self, keep_id: str | None = None, fallback_index: int = 0) -> None:
         list_view = self.query_one(PageList)
-        pages = self._visible(self.loaded)
-        if pages and same_rows(pages, self.shown):
+        pins = self.cache.pinned_pages()
+        pages = pinned_first(self._visible(self.loaded), self.loaded, pins, recent=not self.query_text)
+        pinned = {p.id for p in pins}
+        if pages and same_rows(pages, self.shown) and pinned == self.pinned:
             # Fresh data that draws the same rows (often the cached list, confirmed): rebuilding would blink.
             self.shown = pages
             for item, page in zip(list_view.query(PageItem), pages):
@@ -403,8 +424,9 @@ class NotionTUI(App):
             self._update_status()
             return
         self.shown = pages
+        self.pinned = pinned
         await list_view.clear()
-        await list_view.extend(PageItem(p) for p in pages)
+        await list_view.extend(PageItem(p, p.id in pinned) for p in pages)
         if pages:
             ids = [p.id for p in pages]
             list_view.index = ids.index(keep_id) if keep_id in ids else min(fallback_index, len(pages) - 1)
@@ -417,7 +439,8 @@ class NotionTUI(App):
         known = {p.id for p in self.loaded}
         new = [p for p in pages if p.id not in known]
         self.loaded.extend(new)
-        visible = self._visible(new)
+        shown = {p.id for p in self.shown}  # pinned pages are already on top
+        visible = [p for p in self._visible(new) if p.id not in shown]
         self.shown.extend(visible)
         await self.query_one(PageList).extend(PageItem(p) for p in visible)
         self._update_status()
@@ -473,7 +496,13 @@ class NotionTUI(App):
                 # Keep the cached pages older than this first batch, so the list does not shrink to one batch
                 # at startup or on refresh. Later batches skip the ones already listed.
                 pages = with_cached_tail(pages, cached)
-        await self._show_pages(pages, keep_id=self.current.id if self.current else None)
+        keep_id = self.current.id if self.current else None
+        if not query and self._at_start:
+            # Startup begins on the topmost page: a cursor still on row 0 stays there.
+            self._at_start = False
+            if not self.query_one(PageList).index:
+                keep_id = None
+        await self._show_pages(pages, keep_id=keep_id)
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         if not isinstance(event.item, PageItem):
@@ -772,7 +801,7 @@ class NotionTUI(App):
         for item in self.query_one(PageList).query(PageItem):
             if item.page.id == page.id:
                 item.page = newer
-                item.query_one(TitleLabel).update(newer.title)
+                item.query_one(TitleLabel).update(item.label())
         self.current = newer
         return newer
 
@@ -1681,6 +1710,18 @@ class NotionTUI(App):
         await self._show_pages([p for p in self.loaded if not gone(p)], fallback_index=index)
         self.notify(f"Trashed “{page.title}”")
 
+    async def action_pin(self) -> None:
+        """Pin the highlighted page to the top of the list, or unpin it."""
+        page = self.current
+        if page is None:
+            return
+        on = page.id not in self.pinned
+        if on and self.cache.find_page(page.id.replace("-", "")) is None:
+            self.cache.upsert_pages([page])  # a page reached by a link: pins list only cached pages
+        self.cache.set_pinned(page.id, on)
+        await self._render_list(keep_id=page.id)
+        self.notify(f"{'Pinned' if on else 'Unpinned'} “{page.title}”")
+
     def action_options(self) -> None:
         def closed(_: None) -> None:
             self.call_later(self._options_changed)
@@ -1777,7 +1818,7 @@ class NotionTUI(App):
         if page.id not in ids:
             self.loaded.insert(0, page)
             self.shown.insert(0, page)
-            await list_view.insert(0, [PageItem(page)])
+            await list_view.insert(0, [PageItem(page, page.id in self.pinned)])
             ids.insert(0, page.id)
             list_view.index = None  # the cursor may already be on row 0: make the move below register
         list_view.index = ids.index(page.id)
