@@ -43,3 +43,18 @@ def test_forget_database_drops_its_rows_and_data_source_state(tmp_path):
     assert [p.id for p in cache.recent_pages()] == ["other"]
     assert cache.views("ds") == [] and cache.schema("ds") is None
     assert cache.db_state("ds") == (None, "", None)
+
+
+def test_pins_keep_pin_order_and_forget_drops_them(tmp_path):
+    cache = Cache(tmp_path / "cache.db")
+    a, b, c = (Page(i, i, "2026-01-01", "", "workspace", "") for i in "abc")
+    cache.upsert_pages([a, b])
+    cache.set_pinned(c, True)  # not cached yet: pinning adds its row
+    cache.set_pinned(a, True)
+    cache.set_pinned(c, True)  # pinning twice keeps the first place
+    assert [p.id for p in cache.pinned_pages()] == ["c", "a"]
+    cache.set_pinned(c, False)
+    assert [p.id for p in cache.pinned_pages()] == ["a"]
+    cache.forget("a")
+    cache.upsert_pages([a])
+    assert cache.pinned_pages() == []
