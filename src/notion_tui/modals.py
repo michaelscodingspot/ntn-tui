@@ -6,11 +6,12 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.geometry import Region
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.timer import Timer
 from textual.widgets import (
@@ -505,12 +506,35 @@ class PromptEditScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class CellTextArea(TextArea):
+    """The multi-line cell editor: enter saves, shift+enter (or ctrl+j) starts a new line."""
+
+    class Submitted(Message):
+        def __init__(self, value: str) -> None:
+            super().__init__()
+            self.value = value
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.key == "enter":
+            event.stop()
+            event.prevent_default()
+            self.post_message(self.Submitted(self.text))
+        elif event.key in ("shift+enter", "ctrl+j"):
+            event.stop()
+            event.prevent_default()
+            self._replace_via_keyboard("\n", *self.selection)
+        else:
+            await super()._on_key(event)
+
+
 class CellTextScreen(ModalScreen):
-    """A one-line editor over a grid cell. Dismisses with what `parse` makes of the text, or None
-    on esc or when nothing changed. `parse` raises ValueError to keep the editor open with a message."""
+    """An editor over a grid cell: one line, or with `multi_line` as many as the text needs, growing
+    down from the cell. Dismisses with what `parse` makes of the text, or None on esc or when nothing
+    changed. `parse` raises ValueError to keep the editor open with a message."""
 
     BINDINGS = [
-        Binding("enter", "save", "save"),  # the input takes the key; listed so the footer shows it
+        Binding("enter", "save", "save"),  # the editor takes the key; listed so the footer shows it
+        Binding("shift+enter", "new_line", "new line"),  # the same: the multi-line editor takes it
         Binding("escape", "cancel", "cancel"),
     ]
     DEFAULT_CSS = """
@@ -519,34 +543,69 @@ class CellTextScreen(ModalScreen):
     #cell-input:focus { border: none; background: $boost; }
     """
     MIN_WIDTH = 30
+    MAX_LINES = 12  # the multi-line editor scrolls past this
 
-    def __init__(self, value: str, cell: Region, parse: Callable[[str], object]) -> None:
+    def __init__(self, value: str, cell: Region, parse: Callable[[str], object], multi_line: bool = False) -> None:
         super().__init__()
         self.value = value
         self.cell = cell
         self.parse = parse
+        self.multi_line = multi_line
 
     def compose(self) -> ComposeResult:
-        yield Input(self.value, select_on_focus=False, id="cell-input")
+        if self.multi_line:
+            yield CellTextArea(self.value, soft_wrap=True, compact=True, highlight_cursor_line=False, id="cell-input")
+        else:
+            yield Input(self.value, select_on_focus=False, id="cell-input")
         yield Footer()
 
     def on_mount(self) -> None:
-        box = self.query_one(Input)
+        box = self.query_one("#cell-input")
         width = max(self.cell.width, self.MIN_WIDTH)
         box.styles.width = width
         box.styles.offset = (max(min(self.cell.x, self.size.width - width), 0), self.cell.y)
-        box.cursor_position = len(self.value)
+        if isinstance(box, TextArea):
+            box.move_cursor(box.document.end)
+            self.call_after_refresh(self._fit_height)
+        else:
+            box.cursor_position = len(self.value)
+
+    def _fit_height(self) -> None:
+        """As tall as the wrapped text, up to MAX_LINES and the room below the cell."""
+        box = self.query_one(CellTextArea)
+        room = max(self.size.height - 1 - self.cell.y, 1)  # the footer takes the last line
+        box.styles.height = max(1, min(box.wrapped_document.height, self.MAX_LINES, room))
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        self.call_after_refresh(self._fit_height)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        return self.multi_line if action == "new_line" else True  # False also hides it from the footer
+
+    def action_new_line(self) -> None:
+        pass
 
     def action_save(self) -> None:
-        self.query_one(Input).action_submit()
+        box = self.query_one("#cell-input")
+        if isinstance(box, Input):
+            box.action_submit()
+        else:
+            self._submit(box.text)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
-        if event.value == self.value:
+        self._submit(event.value)
+
+    def on_cell_text_area_submitted(self, event: CellTextArea.Submitted) -> None:
+        event.stop()
+        self._submit(event.value)
+
+    def _submit(self, value: str) -> None:
+        if value == self.value:
             self.dismiss(None)
             return
         try:
-            self.dismiss(self.parse(event.value))
+            self.dismiss(self.parse(value))
         except ValueError as err:
             self.notify(str(err), severity="warning")
 

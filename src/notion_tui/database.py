@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from rich.cells import cell_len, set_cell_size
+
 from . import ntn
 from .ntn import View
 
@@ -118,6 +120,42 @@ def column_widths(natural: list[int], room: int) -> list[int]:
         widths[i] = min(natural[i], max(left // count, MIN_COLUMN_WIDTH))
         left, count = left - widths[i], count - 1
     return widths
+
+
+WRAPPED_ROW_LINES = 10  # most lines a row shows when the grid wraps its rows
+
+
+def natural_width(text: str, wrap: bool) -> int:
+    """Cells a grid cell's text wants: its longest line when rows wrap, otherwise all of it on one line."""
+    if wrap:
+        return max(map(cell_len, text.split("\n")))
+    return cell_len(text.replace("\n", " "))
+
+
+def wrap_lines(text: str, width: int, most: int = WRAPPED_ROW_LINES) -> list[str]:
+    """A cell's text as lines of at most `width` cells: Notion's line breaks kept, words wrapped,
+    a word longer than the width broken. Past `most` lines the last kept one ends with "…"."""
+    width = max(width, 1)
+    lines: list[str] = []
+    for paragraph in text.split("\n"):
+        line = ""
+        for word in paragraph.split(" "):
+            joined = f"{line} {word}" if line else word
+            if cell_len(joined) <= width:
+                line = joined
+                continue
+            if line:
+                lines.append(line)
+            line = word
+            while cell_len(line) > width:
+                head = set_cell_size(line, width).rstrip(" ") or line[0]  # a wide letter isn't split
+                lines.append(head)
+                line = line[len(head):]
+        lines.append(line)
+    if len(lines) > most:
+        last = lines[most - 1]
+        lines = lines[:most - 1] + [(set_cell_size(last, width - 1) if cell_len(last) >= width else last) + "…"]
+    return lines
 
 
 def find_row(rows: list[dict], row_id: str | None) -> dict | None:

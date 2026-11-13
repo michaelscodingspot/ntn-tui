@@ -216,3 +216,13 @@ def test_move_row_swaps_the_rows_and_returns_what_to_save():
     assert rows.move_row(listed, 2, -1, False, "_ord") == [("c", 2), ("b", 3)]
     assert [(r["id"], r["properties"]["_ord"]["number"]) for r in listed] == [("a", 1), ("c", 2), ("b", 3)]
     assert rows.move_row(listed, 0, -1, False, "_ord") is None
+
+
+def test_text_keeps_line_breaks_a_title_doesnt():
+    text = {"type": "rich_text", "rich_text": [{"plain_text": "one\ntwo"}]}
+    title = {"type": "title", "title": [{"plain_text": "one\ntwo"}]}
+    assert rows.multi_line("rich_text") and not rows.multi_line("title")
+    assert rows.cell_text(text) == rows.edit_text(text) == "one\ntwo"
+    assert rows.cell_text(title) == rows.edit_text(title) == "one two"
+    assert rows.parse_text("rich_text", "one\ntwo\n") == ({"rich_text": [{"text": {"content": "one\ntwo"}}]}, "one\ntwo")
+    assert rows.parse_text("title", "one\ntwo")[1] == "one two"

@@ -10,17 +10,22 @@ from textual.geometry import Offset, Region
 from textual.widgets import DataTable
 
 from .bidi import is_rtl, reorder_text
-from .database import column_widths
+from .database import column_widths, natural_width, wrap_lines
 from .rows import cell_text
 
 NEW_ROW = "new-row"  # key of the row shown while its title is typed and sent
 SAVED_MARK_SECONDS = 1.5  # how long a row shows ✓ after a save
 
 
-def _cell(text: str, width: int | None) -> Text:
+def _cell(text: str, width: int | None, wrap: bool) -> Text:
+    """A cell on one line, cut with "…" where it doesn't fit, or wrapped to the column's width."""
+    rtl = is_rtl(text)
+    if wrap and width is not None:
+        return Text("\n".join(reorder_text(line, rtl) for line in wrap_lines(text, width)), no_wrap=True)
+    text = text.replace("\n", " ")
     if width is not None and cell_len(text) > width:
         text = set_cell_size(text, width - 1) + "…"  # cut the logical text, then order RTL words
-    return Text(reorder_text(text, is_rtl(text)), no_wrap=True)
+    return Text(reorder_text(text, rtl), no_wrap=True)
 
 
 class RowGrid(DataTable):
@@ -41,6 +46,8 @@ class RowGrid(DataTable):
         Binding("alt+k,alt+up", "app.row_move(-1)", "move row up", key_display="alt+↑"),
         Binding("alt+j,alt+down", "app.row_move(1)", "move row down", key_display="alt+↓"),
         Binding("e", "app.row_body", "row body"),
+        Binding("E", "app.cell_in_editor", "cell in $EDITOR"),
+        Binding("z", "app.db_wrap", "wrap rows"),
         Binding("ctrl+o", "app.row_claude", "Claude task"),
         Binding("y,ctrl+c", "app.row_copy", "copy cell"),
     ]
@@ -52,6 +59,7 @@ class RowGrid(DataTable):
         self.source: list[dict] | None = None  # the rows list this grid was drawn from
         self.texts: dict[str, list[str]] = {}  # each row's cells in full, by row key, in row order
         self.widths: list[int | None] = []  # longest text each column shows; None: not laid out yet
+        self.wrap = False  # rows grow to show their cells wrapped (`z`), else one line each
 
     @property
     def count(self) -> int:
@@ -77,7 +85,8 @@ class RowGrid(DataTable):
         for name, head in zip(self.names, self.heads):
             self.add_column(head, key=name)
         for key in self.texts:
-            self.add_row(*self._cells(key), key=key, label=marks.get(key, " "))
+            cells = self._cells(key)
+            self.add_row(*cells, key=key, label=marks.get(key, " "), height=max(len(cell.plain.split("\n")) for cell in cells or [Text()]))
         keys = list(self.texts)
         index = keys.index(row_id) if row_id in self.texts else min(at.row, len(keys) - 1)
         self.move_cursor(row=max(index, 0), column=min(at.column, max(len(self.names) - 1, 0)), animate=False)
@@ -87,7 +96,7 @@ class RowGrid(DataTable):
         return [cell_text(props[name]) if name in props else "" for name in self.names]
 
     def _cells(self, row_id: str) -> list[Text]:
-        return [_cell(text, width) for text, width in zip(self.texts[row_id], self.widths)]
+        return [_cell(text, width, self.wrap) for text, width in zip(self.texts[row_id], self.widths)]
 
     def _fit(self) -> bool:
         """Share the grid's width between its columns, so text is cut only where it doesn't fit.
@@ -96,7 +105,7 @@ class RowGrid(DataTable):
         if not self.size.width:  # not laid out yet: sized on the first resize
             self.widths = [None] * len(self.names)
         else:
-            natural = [max(map(cell_len, column)) for column in zip(self.heads, *self.texts.values())]
+            natural = [max(natural_width(text, self.wrap) for text in column) for column in zip(self.heads, *self.texts.values())]
             gutter = 1 + 2 * self.cell_padding  # the column of row marks
             room = self.scrollable_content_region.width - gutter - 2 * self.cell_padding * len(self.heads)
             self.widths = column_widths(natural, room)
@@ -110,10 +119,22 @@ class RowGrid(DataTable):
         return False
 
     def _changed(self, row_id: str) -> None:
-        """Draw a row whose texts changed, or the whole table when that moved the column widths."""
-        if not self._refit():
+        """Draw a row whose texts changed, or the whole table when that moved the column widths
+        or, with wrapped rows, may have changed the row's height."""
+        if self.wrap:
+            self._fit()
+            self._draw()
+        elif not self._refit():
             for name, cell in zip(self.names, self._cells(row_id)):
                 self.update_cell(row_id, name, cell, update_width=True)
+
+    def set_wrap(self, on: bool) -> None:
+        """Wrap the rows' cells (rows as tall as their longest cell) or put each row on one line."""
+        if on != self.wrap:
+            self.wrap = on
+            if self.texts:
+                self._fit()
+                self._draw()
 
     def on_resize(self) -> None:
         if self.texts:
