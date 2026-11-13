@@ -40,7 +40,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `g` / `G`      | top / bottom (bottom loads more)         |
 | `enter`        | open page full screen                    |
 | `esc`          | back to list / clear search              |
-| `tab`          | cycle search → list → preview (in the Edit mode grid: next cell) |
+| `tab`          | search → list → preview; grid: next cell |
 | `w`            | switch list ↔ preview (skips search)     |
 | `/`            | search (instant from cache, then Notion) |
 | `e`            | edit page in `$VISUAL` / `$EDITOR`; on a database, the Edit mode grid |

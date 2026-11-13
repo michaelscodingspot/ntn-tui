@@ -152,8 +152,7 @@ def cell(grid, row_id, name):
 
 def test_tab_moves_between_cells_and_stays_in_the_grid(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "l")
-        await go(app, pilot, "tab", "tab")
+        await go(app, pilot, "l", "tab", "tab")
         assert grid.has_focus and grid.current_row_id == "a" and grid.cursor_column == 2
         await go(app, pilot, "G", "shift+tab")
         assert grid.current_row_id == "b" and grid.cursor_column == 1

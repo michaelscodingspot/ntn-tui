@@ -127,9 +127,10 @@ class RowGrid(DataTable):
         columns = len(self.names)
         if not columns or not self.row_count:
             return
+        self._set_hover_cursor(False)  # as the arrow keys do: the cell under the mouse stops looking current
         at = self.cursor_coordinate
         index = min(max(at.row * columns + at.column + step, 0), self.row_count * columns - 1)
-        self.move_cursor(row=index // columns, column=index % columns)
+        self.move_cursor(row=index // columns, column=index % columns, animate=True)
 
     @property
     def current_row_id(self) -> str | None:
