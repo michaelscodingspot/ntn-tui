@@ -221,6 +221,23 @@ def _whole_as_int(number: float) -> int | float:
     return int(number) if float(number).is_integer() else number
 
 
+def _spread(values: list[float | None], top: int, bottom: int) -> tuple[int | float, int | float] | None:
+    """Two values evenly spaced between the rows just outside the pair top/bottom (5, _, _, 20 → 10,
+    15), whole numbers when rounding keeps them in order; None when a row outside is missing, has no
+    value, or the values aren't in order around the pair."""
+    if top == 0 or bottom == len(values) - 1:
+        return None
+    low, high = values[top - 1], values[bottom + 1]
+    pair = (values[top], values[bottom])
+    if low is None or high is None or None in pair or not low <= min(pair) <= max(pair) <= high or low == high:
+        return None
+    step = (high - low) / 3
+    first, second = low + step, low + 2 * step
+    if low < round(first) < round(second) < high:
+        return round(first), round(second)
+    return _whole_as_int(first), _whole_as_int(second)
+
+
 def order_moves(values: list[float | None], index: int, step: int, descending: bool = False) -> dict[int, int | float] | None:
     """New order values ({row index before the move: value}) that move the row at `index` one place up
     (step -1) or down (step 1), in rows sorted by those values; None at the edge. Two different values
@@ -233,6 +250,9 @@ def order_moves(values: list[float | None], index: int, step: int, descending: b
         return {i: _whole_as_int(-v) for i, v in moves.items()}
     top, bottom = min(index, other), max(index, other)
     above, below = values[top], values[bottom]
+    spread = _spread(values, top, bottom)
+    if spread is not None:
+        return {bottom: spread[0], top: spread[1]}  # the lower row goes on top
     if above is not None and below is not None and above != below:
         return {top: _whole_as_int(below), bottom: _whole_as_int(above)}
     known = [v for v in (above, below) if v is not None]
