@@ -150,6 +150,21 @@ def cell(grid, row_id, name):
     return str(grid.get_cell(row_id, name))
 
 
+def test_tab_moves_between_cells_and_stays_in_the_grid(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "l")
+        await go(app, pilot, "tab", "tab")
+        assert grid.has_focus and grid.current_row_id == "a" and grid.cursor_column == 2
+        await go(app, pilot, "G", "shift+tab")
+        assert grid.current_row_id == "b" and grid.cursor_column == 1
+        await go(app, pilot, "h", "shift+tab")
+        assert grid.current_row_id == "a" and grid.cursor_column == len(grid.names) - 1
+        await go(app, pilot, "tab")
+        assert grid.has_focus and grid.current_row_id == "b" and grid.cursor_column == 0
+
+    drive(tmp_path, script)
+
+
 def test_last_mode_opens_without_taking_focus_from_the_list(tmp_path, notion):
     async def script(app, pilot, grid):
         assert grid.display and not app.query_one(PreviewScroll).display
