@@ -4,7 +4,7 @@ This project is called **notion-tui**, or **ntn-tui** in short.
 
 It's a terminal UI for Notion (Python 3.13, Textual, run with `uv run notion-tui`): page list left, Markdown preview right, edit in `$EDITOR`.
 
-- `src/notion_tui/app.py` — Textual app: list (pinned pages on top, `p`), preview, search, database view tabs / filter line / paging, View / Edit mode and row writes, once-a-minute staleness check of the focused page or database rows, key bindings.
+- `src/notion_tui/app.py` — Textual app: list (pinned pages on top, `p`; tested in `tests/test_pins.py`), preview, search, database view tabs / filter line / paging, View / Edit mode and row writes, once-a-minute staleness check of the focused page or database rows, key bindings.
 - `src/notion_tui/database.py` — pure database-preview helpers: rows table and list layouts, view and grid columns, grid column widths (how columns share the width), labels, sort labels, putting a new row next to another. Tested in `tests/test_database.py`.
 - `src/notion_tui/grid.py` — the Edit mode grid: rows and columns with a cell cursor, row keys, a new row at the bottom (`n`) or in place (`i` / `I`), cell copy, saving marks, `alt+j` / `alt+k` to move a row; columns share the grid's width and cells are cut with "…" only where they don't fit. Driven end to end in `tests/test_row_editing.py`.
 - `src/notion_tui/rows.py` — pure row editing helpers: which property types are editable and how, typed text ↔ Notion property values, the `_ord` value of a new row (`n`, `i` / `I`: halfway to a neighbour, or the highest + 8), new `_ord` values that move a row up or down (`alt+j` / `alt+k`). Tested in `tests/test_rows.py`.
