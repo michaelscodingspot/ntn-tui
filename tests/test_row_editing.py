@@ -1,6 +1,7 @@
 """Database View and Edit modes end to end: the real app, driven by keys, on a fake Notion."""
 
 import asyncio
+import contextlib
 import copy
 
 import pytest
@@ -1005,12 +1006,26 @@ def test_z_expands_only_the_cursor_row_and_is_remembered(tmp_path, notion):
     drive(tmp_path, script, schema=NOTES_SCHEMA)
 
 
+def test_deleting_the_expanded_row_expands_the_next(tmp_path, notion):
+    with_notes(notion)  # row b sets every column's width: no full redraw, the cursor watcher expands b
+    notion.rows[1]["properties"]["Name"]["title"] = [{"plain_text": "Bravo"}]
+    notion.rows[1]["properties"]["Notes"]["rich_text"] = [{"plain_text": "one\na much longer second line here"}]
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "z")
+        assert grid.rows["a"].height == 3
+        await go(app, pilot, "x")
+        assert not grid.has_row("a") and grid.current_row_id == "b" and grid.rows["b"].height == 2
+
+    drive(tmp_path, script, schema=NOTES_SCHEMA)
+
+
 def test_expanded_row_comes_back(tmp_path, notion):
     with_notes(notion)
     Cache(tmp_path / "c.db").put_db_expand_row("ds", True)
 
     async def script(app, pilot, grid):
-        assert grid.wrap and grid.rows["a"].height == 3 and grid.rows["b"].height == 1
+        assert grid.expand and grid.rows["a"].height == 3 and grid.rows["b"].height == 1
 
     drive(tmp_path, script, schema=NOTES_SCHEMA)
 
@@ -1030,6 +1045,18 @@ def test_text_cell_edits_across_lines(tmp_path, notion):
         saved = NOTES + "\nx\ny"
         assert notion.calls == [("a", {"Notes": {"rich_text": [{"text": {"content": saved}}]}})]
         assert cell(grid, "a", "Notes") == saved and grid.rows["a"].height == 5
+
+    drive(tmp_path, script, schema=NOTES_SCHEMA)
+
+
+def test_esc_cancels_the_multi_line_editor(tmp_path, notion):
+    with_notes(notion)
+
+    async def script(app, pilot, grid):
+        await to_notes(app, pilot, grid)
+        await go(app, pilot, "enter", "shift+enter", "x", "escape")
+        assert not isinstance(app.screen, CellTextScreen)
+        assert notion.calls == [] and cell(grid, "a", "Notes").startswith("Goals:")
 
     drive(tmp_path, script, schema=NOTES_SCHEMA)
 
@@ -1054,7 +1081,7 @@ def fake_editor(monkeypatch):
 
     def install(result):
         monkeypatch.setattr(editor, "edit_text", lambda text: edit(text, result))
-        monkeypatch.setattr(NotionTUI, "_suspend_on_screen", lambda self: __import__("contextlib").nullcontext())
+        monkeypatch.setattr(NotionTUI, "_suspend_on_screen", lambda self: contextlib.nullcontext())
         return seen
 
     return install

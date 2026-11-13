@@ -263,27 +263,28 @@ class Cache:
 
     def db_edit_mode(self, data_source_id: str) -> bool:
         """Whether the database was last used in Edit mode."""
-        row = self.db.execute("SELECT edit_mode FROM db_state WHERE data_source_id = ?", (data_source_id,)).fetchone()
-        return bool(row and row[0])
+        return self._db_flag(data_source_id, "edit_mode")
 
     def put_db_edit_mode(self, data_source_id: str, on: bool) -> None:
-        with self.db:
-            self.db.execute(
-                "INSERT INTO db_state (data_source_id, edit_mode) VALUES (?, ?) "
-                "ON CONFLICT(data_source_id) DO UPDATE SET edit_mode=excluded.edit_mode",
-                (data_source_id, int(on)),
-            )
+        self._put_db_flag(data_source_id, "edit_mode", on)
 
     def db_expand_row(self, data_source_id: str) -> bool:
         """Whether the database's Edit grid shows the cursor's row wrapped."""
-        row = self.db.execute("SELECT expand_row FROM db_state WHERE data_source_id = ?", (data_source_id,)).fetchone()
-        return bool(row and row[0])
+        return self._db_flag(data_source_id, "expand_row")
 
     def put_db_expand_row(self, data_source_id: str, on: bool) -> None:
+        self._put_db_flag(data_source_id, "expand_row", on)
+
+    def _db_flag(self, data_source_id: str, column: str) -> bool:
+        """An on/off column of db_state; `column` is one of the names above, never user input."""
+        row = self.db.execute(f"SELECT {column} FROM db_state WHERE data_source_id = ?", (data_source_id,)).fetchone()
+        return bool(row and row[0])
+
+    def _put_db_flag(self, data_source_id: str, column: str, on: bool) -> None:
         with self.db:
             self.db.execute(
-                "INSERT INTO db_state (data_source_id, expand_row) VALUES (?, ?) "
-                "ON CONFLICT(data_source_id) DO UPDATE SET expand_row=excluded.expand_row",
+                f"INSERT INTO db_state (data_source_id, {column}) VALUES (?, ?) "
+                f"ON CONFLICT(data_source_id) DO UPDATE SET {column}=excluded.{column}",
                 (data_source_id, int(on)),
             )
 

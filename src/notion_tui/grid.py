@@ -67,7 +67,7 @@ class RowGrid(DataTable):
         self.source: list[dict] | None = None  # the rows list this grid was drawn from
         self.texts: dict[str, list[str]] = {}  # each row's cells in full, by row key, in row order
         self.widths: list[int | None] = []  # longest text each column shows; None: not laid out yet
-        self.wrap = False  # the cursor's row grows to show its cells wrapped (`z`); others stay one line
+        self.expand = False  # the cursor's row grows to show its cells wrapped (`z`); others stay one line
         self.expanded: str | None = None  # the row drawn wrapped now
 
     @property
@@ -78,9 +78,11 @@ class RowGrid(DataTable):
     def stale(self, rows: list[dict], names: list[str]) -> bool:
         return rows is not self.source or len(rows) != self.count or names != self.names
 
-    def show(self, rows: list[dict], names: list[str]) -> None:
-        """Draw the rows, keeping the cursor on the same row and column when they are still there."""
+    def show(self, rows: list[dict], names: list[str], expand: bool) -> None:
+        """Draw the rows, keeping the cursor on the same row and column when they are still there;
+        with `expand` the cursor's row wrapped."""
         self.names, self.heads, self.source = names, [name.strip() for name in names], rows
+        self.expand = expand
         self.texts = {row["id"]: self._texts(row) for row in rows}
         self._fit()
         self._draw()
@@ -113,13 +115,13 @@ class RowGrid(DataTable):
         cells = self._cells(row_id, wrap)
         for name, cell in zip(self.names, cells):
             self.update_cell(row_id, name, cell)
-        self.rows[row_id].height = max((len(cell.plain.split("\n")) for cell in cells), default=1)
+        self.rows[row_id].height = max((cell.plain.count("\n") + 1 for cell in cells), default=1)
         self._clear_caches()
         self._require_update_dimensions = True  # the table's height changes with the row's
 
     def _expand_cursor_row(self) -> None:
         """With `z` on, wrap the cursor's row and put the row it left back on one line."""
-        target = self.current_row_id if self.wrap else None
+        target = self.current_row_id if self.expand else None
         if target == self.expanded:
             return
         if self.expanded is not None and self.has_row(self.expanded):
@@ -140,8 +142,7 @@ class RowGrid(DataTable):
         if not self.size.width:  # not laid out yet: sized on the first resize
             self.widths = [None] * len(self.names)
         else:
-            # with `z`, room for a cell's longest line too, so widths don't change as the cursor moves
-            natural = [max(natural_width(text, wrap) for text in column for wrap in {False, self.wrap})
+            natural = [max(natural_width(text, self.expand) for text in column)
                        for column in zip(self.heads, *self.texts.values())]
             gutter = 1 + 2 * self.cell_padding  # the column of row marks
             room = self.scrollable_content_region.width - gutter - 2 * self.cell_padding * len(self.heads)
@@ -157,18 +158,13 @@ class RowGrid(DataTable):
 
     def _changed(self, row_id: str) -> None:
         """Draw a row whose texts changed, or the whole table when that moved the column widths."""
-        if self._refit():
-            return
-        if row_id == self.expanded:
-            self._redraw_cells(row_id, True)
-        else:
-            for name, cell in zip(self.names, self._cells(row_id)):
-                self.update_cell(row_id, name, cell, update_width=True)
+        if not self._refit():  # the widths stayed: every cell already fits its column
+            self._redraw_cells(row_id, row_id == self.expanded)
 
-    def set_wrap(self, on: bool) -> None:
+    def set_expand(self, on: bool) -> None:
         """Wrap the cursor's row (as tall as its longest cell, following the cursor) or keep every row on one line."""
-        if on != self.wrap:
-            self.wrap = on
+        if on != self.expand:
+            self.expand = on
             if self.texts:
                 self._fit()
                 self._draw()

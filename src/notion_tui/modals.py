@@ -522,7 +522,7 @@ class CellTextArea(TextArea):
         elif event.key in ("shift+enter", "ctrl+j"):
             event.stop()
             event.prevent_default()
-            self._replace_via_keyboard("\n", *self.selection)
+            self.replace("\n", *self.selection)
         else:
             await super()._on_key(event)
 
@@ -564,7 +564,7 @@ class CellTextScreen(ModalScreen):
         width = max(self.cell.width, self.MIN_WIDTH)
         box.styles.width = width
         box.styles.offset = (max(min(self.cell.x, self.size.width - width), 0), self.cell.y)
-        if isinstance(box, TextArea):
+        if self.multi_line:
             box.move_cursor(box.document.end)
             self.call_after_refresh(self._fit_height)
         else:
@@ -586,11 +586,10 @@ class CellTextScreen(ModalScreen):
         pass
 
     def action_save(self) -> None:
-        box = self.query_one("#cell-input")
-        if isinstance(box, Input):
-            box.action_submit()
+        if self.multi_line:
+            self._submit(self.query_one(CellTextArea).text)
         else:
-            self._submit(box.text)
+            self.query_one(Input).action_submit()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()

@@ -100,6 +100,9 @@ def test_wrap_lines_keeps_breaks_wraps_words_and_caps():
     assert wrap_lines("", 5) == [""]
     assert wrap_lines("\n".join("abcdef"), 4, most=3) == ["a", "b", "c ⏬"]  # the mark at the right edge
     assert wrap_lines("\n".join(["abcd"] * 3), 4, most=2) == ["abcd", "ab⏬"]
-    assert natural_width("ab\nabcd", wrap=True) == 4
-    assert natural_width("ab\nabcd", wrap=False) == 5  # first line, a space, the two-cell mark
-    assert natural_width("ab cd", wrap=False) == 5
+    assert wrap_lines("  - sub item\n- top", 20) == ["  - sub item", "- top"]  # indent kept
+    assert wrap_lines("  - one two", 8) == ["  - one", "two"]
+    assert natural_width("ab\nabcdefg", expand=True) == 7  # the longest line
+    assert natural_width("ab\nabcd", expand=True) == 5  # the first line and its mark are wider
+    assert natural_width("ab\nabcd", expand=False) == 5  # first line, a space, the two-cell mark
+    assert natural_width("ab cd", expand=False) == 5
