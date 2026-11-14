@@ -150,12 +150,16 @@ it empty. `i` on the last loaded row while more rows wait asks for `m` first: th
 `_ord` isn't known.
 
 `alt+j` / `alt+k` reorder rows in a database with a number column named `_ord`, when the rows are
-sorted by `_ord` first (ascending or descending). The row and its neighbour swap `_ord` values; when
-the two are equal or empty, they get new values that keep them in the new order (an equal pair: the
-lower one between its neighbours' values; an empty one: the last value + 1). The cursor stays on the
-moved row. A failed save brings back Notion's order, and moves made after it aren't sent.
-The new values look only at the rows shown: with more rows to load (`m`) or a filter on, a row
-given a new value next to an equal or empty one may land elsewhere after `r`.
+sorted by `_ord` first (ascending or descending). The row and its neighbour get `_ord` values spread
+evenly between the rows around them, whole numbers when they fit (5, 13, 14, 20 → 5, 10, 15, 20), so
+later inserts find room. At the first or last row shown, or next to an empty `_ord`, the two swap
+values instead; when those are equal or empty, they get new values that keep them in the new order
+(an equal pair: the lower one between its neighbours' values; an empty one: the last value + 1).
+The cursor stays on the moved row. A failed save brings back Notion's order, and moves made after it
+aren't sent. The new values look only at the rows shown: with more rows to load (`m`) or a filter
+on, a row given a new value next to an equal or empty one may land elsewhere after `r`, and with a
+filter on, a spread pair may pass rows the filter hides. `alt+↑` / `alt+↓` do the same in the app's
+own `nui` window, where the `nui` launcher unmaps kitty's pane moves.
 
 | Property                               | Editor                                     |
 |----------------------------------------|--------------------------------------------|
