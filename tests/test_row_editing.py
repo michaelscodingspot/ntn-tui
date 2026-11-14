@@ -707,6 +707,17 @@ def test_moving_up_from_the_top_row_does_nothing(tmp_path, notion):
     drive_ordered(tmp_path, notion, script, [1, 2])
 
 
+def test_moving_a_row_spreads_the_pair_between_the_rows_around_it(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "j", "alt+j")
+        assert list(grid.texts) == ["a", "c", "b", "d"] and grid.current_row_id == "b"
+        assert order_of(app) == [("a", 5), ("c", 10), ("b", 15), ("d", 20)]
+        assert sorted(notion.calls) == [("b", {"_ord": {"number": 15}}), ("c", {"_ord": {"number": 10}})]
+        assert cell(grid, "b", "_ord") == "15" and cell(grid, "c", "_ord") == "10"
+
+    drive_ordered(tmp_path, notion, script, [5, 13, 14, 20])
+
+
 def test_moving_past_an_empty_order_numbers_both_rows(tmp_path, notion):
     async def script(app, pilot, grid):
         await go(app, pilot, "enter", "alt+j")
