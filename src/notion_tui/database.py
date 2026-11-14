@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from rich.cells import cell_len, set_cell_size
+
 from . import ntn
 from .ntn import View
 
@@ -118,6 +120,52 @@ def column_widths(natural: list[int], room: int) -> list[int]:
         widths[i] = min(natural[i], max(left // count, MIN_COLUMN_WIDTH))
         left, count = left - widths[i], count - 1
     return widths
+
+
+WRAPPED_ROW_LINES = 10  # most lines the expanded row (`z`) shows
+MORE_LINES = "⏬"  # ends a grid cell that has more lines than it shows; a long line is cut with "…"
+
+
+def natural_width(text: str, expand: bool) -> int:
+    """Cells a grid cell's text wants: its first line, and the more-lines mark when there are others;
+    with `expand` (`z`) also its longest line, so widths don't change as the expanded row moves."""
+    lines = text.split("\n")
+    one_line = cell_len(lines[0]) + (1 + cell_len(MORE_LINES) if len(lines) > 1 else 0)
+    return max(one_line, *map(cell_len, lines)) if expand else one_line
+
+
+def with_more_mark(line: str, width: int | None) -> str:
+    """A line ending in the more-lines mark: at the column's right edge, the line cut to make room."""
+    if width is None:
+        return f"{line} {MORE_LINES}"
+    return set_cell_size(line, max(width - cell_len(MORE_LINES), 0)) + MORE_LINES
+
+
+def wrap_lines(text: str, width: int, most: int = WRAPPED_ROW_LINES) -> list[str]:
+    """A cell's text as lines of at most `width` cells: Notion's line breaks kept, words wrapped,
+    a word longer than the width broken, a line's indent kept on its first row. Past `most` lines
+    the last kept one ends with the more-lines mark."""
+    width = max(width, 1)
+    lines: list[str] = []
+    for paragraph in text.split("\n"):
+        body = paragraph.lstrip(" ")
+        line = paragraph[:len(paragraph) - len(body)][:width - 1]  # the indent, e.g. a nested list item
+        for word in body.split(" "):
+            joined = f"{line} {word}" if line.strip() else line + word
+            if cell_len(joined) <= width:
+                line = joined
+                continue
+            if line.strip():
+                lines.append(line)
+            line = word
+            while cell_len(line) > width:
+                head = set_cell_size(line, width).rstrip(" ") or line[0]  # a wide letter isn't split
+                lines.append(head)
+                line = line[len(head):]
+        lines.append(line)
+    if len(lines) > most:
+        lines = lines[:most - 1] + [with_more_mark(lines[most - 1], width)]
+    return lines
 
 
 def find_row(rows: list[dict], row_id: str | None) -> dict | None:

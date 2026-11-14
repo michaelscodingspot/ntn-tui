@@ -916,8 +916,11 @@ class NotionTUI(App):
             loaded = self._current_rows()
             rows = loaded.rows if loaded else grid.source or []
             names = grid_columns(req.schema, req.columns)
+            expand = self.cache.db_expand_row(self.current.id)
             if grid.stale(rows, names):
-                grid.show(rows, names)
+                grid.show(rows, names, expand)
+            else:
+                grid.set_expand(expand)
         switched, focused = editing != grid.display, grid.has_focus or preview.has_focus
         grid.display, preview.display = editing, not editing
         if switched and focused:
@@ -1004,8 +1007,43 @@ class NotionTUI(App):
             if change:
                 self._save_cell(row_id, name, *change)
 
-        screen = CellTextScreen(row_edit.edit_text(prop), self.query_one(RowGrid).cell_region(), lambda text: row_edit.parse_text(kind, text))
+        screen = CellTextScreen(row_edit.edit_text(prop), self.query_one(RowGrid).cell_region(),
+                                lambda text: row_edit.parse_text(kind, text), row_edit.multi_line(kind))
         self.push_screen(screen, done)
+
+    def action_cell_in_editor(self) -> None:
+        """Edit the text cell under the grid's cursor in $EDITOR and save it to Notion."""
+        cell = self._cursor_cell()
+        if not cell:
+            return
+        row, name, prop = cell
+        kind = prop.get("type", "")
+        if row_edit.editor(kind) != "text":
+            self.notify(f"{name.strip()} isn't a text cell; enter edits it.", severity="warning")
+            return
+        if self.query_one(RowGrid).saving(row["id"]):
+            self.notify("Still saving the row; try again when it's saved.", severity="warning")
+            return
+        original = row_edit.edit_text(prop)
+        edited = self._run_editor(original + "\n")
+        if edited is None:
+            return
+        edited = edited.removesuffix("\n")  # the line end editors add
+        if edited == original:
+            return
+        try:
+            change = row_edit.parse_text(kind, edited)
+        except ValueError as err:
+            self.notify(str(err), title=f"{name.strip()} not saved", severity="warning")
+            return
+        self._save_cell(row["id"], name, *change)
+
+    def action_db_expand(self) -> None:
+        """`z` in the grid: show the cursor's row wrapped, or back to one line per row; kept per database."""
+        grid = self.query_one(RowGrid)
+        on = not grid.expand
+        self.cache.put_db_expand_row(self.current.id, on)
+        grid.set_expand(on)
 
     def _edit_pick_cell(self, row_id: str, name: str, kind: str, prop: dict, multi: bool) -> None:
         page = self.current
@@ -1560,19 +1598,8 @@ class NotionTUI(App):
             self._reload_after_edit(page)
             return
         original = body + "\n"  # the same text `ntn pages edit` puts in the editor
-        failed: OSError | None = None
-        with self._suspend_on_screen():
-            try:  # an exception here would leave the TUI suspended
-                code, edited = editor.edit_text(original)
-            except OSError as err:
-                failed = err
-        if failed is not None:
-            self.notify(str(failed), title="Could not start the editor", severity="error")
-            return
-        if code != 0:
-            self.notify(f"The editor exited with status {code}; nothing saved", severity="warning")
-            return
-        if edited == original:
+        edited = self._run_editor(original)
+        if edited is None or edited == original:
             return
         if not edited.strip():
             self.notify("The page is empty in the editor; nothing saved", severity="warning")
@@ -1585,6 +1612,23 @@ class NotionTUI(App):
             self.notify(f"{err}\nYour text is in {kept}", title="Could not save the page", severity="error")
             return
         self._reload_after_edit(page)
+
+    def _run_editor(self, text: str) -> str | None:
+        """Run $EDITOR on `text` over the TUI's last frame: the edited text, or None (with a notice)
+        when the editor didn't start or exited with an error."""
+        failed: OSError | None = None
+        with self._suspend_on_screen():
+            try:  # an exception here would leave the TUI suspended
+                code, edited = editor.edit_text(text)
+            except OSError as err:
+                failed = err
+        if failed is not None:
+            self.notify(str(failed), title="Could not start the editor", severity="error")
+            return None
+        if code != 0:
+            self.notify(f"The editor exited with status {code}; nothing saved", severity="warning")
+            return None
+        return edited
 
     @contextmanager
     def _busy(self) -> Iterator[None]:

@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS db_state (
     query_text     TEXT NOT NULL DEFAULT '',
     sorts_json     TEXT            -- NULL = the view's sorts
     -- edit_mode   INTEGER: 1 = rows open in the Edit grid (added by migration)
+    -- expand_row  INTEGER: 1 = the Edit grid shows the cursor's row wrapped, `z` (added by migration)
 );
 
 -- Pages and databases pinned to the top of the list, in the order they were pinned.
@@ -104,8 +105,11 @@ class Cache:
                 self.db.execute("ALTER TABLE pages ADD COLUMN kind TEXT NOT NULL DEFAULT 'page'")
             if "has_body" not in columns:  # caches made before the database entries option
                 self.db.execute("ALTER TABLE pages ADD COLUMN has_body INTEGER")
-            if not any(row[1] == "edit_mode" for row in self.db.execute("PRAGMA table_info(db_state)")):
+            state_columns = {row[1] for row in self.db.execute("PRAGMA table_info(db_state)")}
+            if "edit_mode" not in state_columns:
                 self.db.execute("ALTER TABLE db_state ADD COLUMN edit_mode INTEGER NOT NULL DEFAULT 0")
+            if "expand_row" not in state_columns:
+                self.db.execute("ALTER TABLE db_state ADD COLUMN expand_row INTEGER NOT NULL DEFAULT 0")
 
     def recent_pages(self, limit: int = 200) -> list[Page]:
         rows = self.db.execute(_PAGE_SELECT + "ORDER BY p.last_edited DESC LIMIT ?", (limit,))
@@ -287,14 +291,28 @@ class Cache:
 
     def db_edit_mode(self, data_source_id: str) -> bool:
         """Whether the database was last used in Edit mode."""
-        row = self.db.execute("SELECT edit_mode FROM db_state WHERE data_source_id = ?", (data_source_id,)).fetchone()
-        return bool(row and row[0])
+        return self._db_flag(data_source_id, "edit_mode")
 
     def put_db_edit_mode(self, data_source_id: str, on: bool) -> None:
+        self._put_db_flag(data_source_id, "edit_mode", on)
+
+    def db_expand_row(self, data_source_id: str) -> bool:
+        """Whether the database's Edit grid shows the cursor's row wrapped."""
+        return self._db_flag(data_source_id, "expand_row")
+
+    def put_db_expand_row(self, data_source_id: str, on: bool) -> None:
+        self._put_db_flag(data_source_id, "expand_row", on)
+
+    def _db_flag(self, data_source_id: str, column: str) -> bool:
+        """An on/off column of db_state; `column` is one of the names above, never user input."""
+        row = self.db.execute(f"SELECT {column} FROM db_state WHERE data_source_id = ?", (data_source_id,)).fetchone()
+        return bool(row and row[0])
+
+    def _put_db_flag(self, data_source_id: str, column: str, on: bool) -> None:
         with self.db:
             self.db.execute(
-                "INSERT INTO db_state (data_source_id, edit_mode) VALUES (?, ?) "
-                "ON CONFLICT(data_source_id) DO UPDATE SET edit_mode=excluded.edit_mode",
+                f"INSERT INTO db_state (data_source_id, {column}) VALUES (?, ?) "
+                f"ON CONFLICT(data_source_id) DO UPDATE SET {column}=excluded.{column}",
                 (data_source_id, int(on)),
             )
 

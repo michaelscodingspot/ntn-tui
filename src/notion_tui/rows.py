@@ -37,9 +37,16 @@ def can_add_options(kind: str) -> bool:
     return kind in _NEW_OPTION_TYPES
 
 
+def multi_line(kind: str) -> bool:
+    """Whether a property type keeps line breaks: text does, a title is one line in Notion."""
+    return kind == "rich_text"
+
+
 def cell_text(prop: dict) -> str:
-    """A property as one line for a grid cell."""
-    return _one_line(value_text(prop))
+    """A property's text for a grid cell, line breaks kept where the type has them; the grid puts
+    it on one line or wraps it."""
+    text = value_text(prop)
+    return text if multi_line(prop.get("type", "")) else _one_line(text)
 
 
 def _one_line(text: str) -> str:
@@ -49,7 +56,7 @@ def _one_line(text: str) -> str:
 def edit_text(prop: dict) -> str:
     """A property's value as the text the cell editor starts with."""
     if prop.get("type") != "date":
-        return value_text(prop).replace("\n", " ")
+        return cell_text(prop)
     return copy_text(prop)  # in full, so a time of day isn't lost
 
 
@@ -107,7 +114,8 @@ def parse_text(kind: str, text: str) -> tuple[dict, str]:
     text = text.strip()
     match kind:
         case "title" | "rich_text":
-            return {kind: _rich_text(text)}, _one_line(text)
+            text = text if multi_line(kind) else _one_line(text)
+            return {kind: _rich_text(text)}, text
         case "number":
             value = {kind: _number_value(text)}
         case "date":

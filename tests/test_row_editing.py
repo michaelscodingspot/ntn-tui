@@ -1,12 +1,13 @@
 """Database View and Edit modes end to end: the real app, driven by keys, on a fake Notion."""
 
 import asyncio
+import contextlib
 import copy
 
 import pytest
-from textual.widgets import Input, Markdown
+from textual.widgets import Input, Markdown, TextArea
 
-from notion_tui import claude, ntn
+from notion_tui import claude, editor, ntn
 from notion_tui.app import NotionTUI, PageList, PreviewScroll
 from notion_tui.cache import Cache
 from notion_tui.grid import RowGrid
@@ -84,7 +85,7 @@ class FakeNotion:
         target = next(r for r in self.rows if r["id"] == row_id)
         for name, value in properties.items():
             (kind, new), = value.items()
-            if kind == "title":
+            if kind in ("title", "rich_text"):
                 new = [{"plain_text": part["text"]["content"]} for part in new]
             target["properties"][name][kind] = new
         return copy.deepcopy(target)
@@ -984,5 +985,156 @@ def test_rows_that_failed_to_load_are_not_requeried_each_minute(tmp_path, notion
         app._watch_current()
         await settle(app, pilot)
         assert notion.queries == queries
+
+    drive(tmp_path, script)
+
+
+# ---------- multi-line text cells ----------
+
+NOTES_SCHEMA = SCHEMA + [{"id": "n", "name": "Notes", "type": "rich_text", "options": []}]
+NOTES = "Goals:\n- ship grid editing\n- multi-line cells"
+
+
+def with_notes(notion, text=NOTES):
+    notion.schema = NOTES_SCHEMA
+    for r in notion.rows:
+        r["properties"]["Notes"] = {"type": "rich_text", "rich_text": []}
+    notion.rows[0]["properties"]["Notes"]["rich_text"] = [{"plain_text": text}]
+
+
+async def to_notes(app, pilot, grid):
+    await go(app, pilot, "enter")
+    grid.move_cursor(row=0, column=grid.names.index("Notes"))
+    await settle(app, pilot)
+
+
+def test_z_expands_only_the_cursor_row_and_is_remembered(tmp_path, notion):
+    with_notes(notion)
+    notion.rows[1]["properties"]["Notes"]["rich_text"] = [{"plain_text": "one\ntwo"}]
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter")
+        assert grid.rows["a"].height == grid.rows["b"].height == 1
+        notes = cell(grid, "a", "Notes")
+        assert notes.startswith("Goals: ") and notes.endswith("⏬") and "ship" not in notes  # first line + mark
+        await go(app, pilot, "z")
+        assert grid.rows["a"].height == 3 and grid.rows["b"].height == 1
+        assert cell(grid, "a", "Notes").split("\n") == ["Goals:", "- ship grid editing", "- multi-line cells"]
+        assert cell(grid, "b", "Notes").rstrip(" ⏬") == "one"
+        assert app.cache.db_expand_row("ds")
+        await go(app, pilot, "j")  # the expanded row follows the cursor
+        assert grid.rows["a"].height == 1 and grid.rows["b"].height == 2
+        assert cell(grid, "b", "Notes").split("\n") == ["one", "two"]
+        await go(app, pilot, "z")
+        assert grid.rows["b"].height == 1 and not app.cache.db_expand_row("ds")
+
+    drive(tmp_path, script, schema=NOTES_SCHEMA)
+
+
+def test_deleting_the_expanded_row_expands_the_next(tmp_path, notion):
+    with_notes(notion)  # row b sets every column's width: no full redraw, the cursor watcher expands b
+    notion.rows[1]["properties"]["Name"]["title"] = [{"plain_text": "Bravo"}]
+    notion.rows[1]["properties"]["Notes"]["rich_text"] = [{"plain_text": "one\na much longer second line here"}]
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "z")
+        assert grid.rows["a"].height == 3
+        await go(app, pilot, "x")
+        assert not grid.has_row("a") and grid.current_row_id == "b" and grid.rows["b"].height == 2
+
+    drive(tmp_path, script, schema=NOTES_SCHEMA)
+
+
+def test_expanded_row_comes_back(tmp_path, notion):
+    with_notes(notion)
+    Cache(tmp_path / "c.db").put_db_expand_row("ds", True)
+
+    async def script(app, pilot, grid):
+        assert grid.expand and grid.rows["a"].height == 3 and grid.rows["b"].height == 1
+
+    drive(tmp_path, script, schema=NOTES_SCHEMA)
+
+
+def test_text_cell_edits_across_lines(tmp_path, notion):
+    with_notes(notion)
+
+    async def script(app, pilot, grid):
+        await to_notes(app, pilot, grid)
+        await go(app, pilot, "z", "enter")  # the expanded row grows with the saved text
+        box = app.screen.query_one(TextArea)
+        assert box.text == NOTES and box.size.height == 3
+        await go(app, pilot, "shift+enter", "x", "ctrl+j", "y")
+        assert box.size.height == 5  # grows down with the text
+        await go(app, pilot, "enter")
+        assert not isinstance(app.screen, CellTextScreen)
+        saved = NOTES + "\nx\ny"
+        assert notion.calls == [("a", {"Notes": {"rich_text": [{"text": {"content": saved}}]}})]
+        assert cell(grid, "a", "Notes") == saved and grid.rows["a"].height == 5
+
+    drive(tmp_path, script, schema=NOTES_SCHEMA)
+
+
+def test_esc_cancels_the_multi_line_editor(tmp_path, notion):
+    with_notes(notion)
+
+    async def script(app, pilot, grid):
+        await to_notes(app, pilot, grid)
+        await go(app, pilot, "enter", "shift+enter", "x", "escape")
+        assert not isinstance(app.screen, CellTextScreen)
+        assert notion.calls == [] and cell(grid, "a", "Notes").startswith("Goals:")
+
+    drive(tmp_path, script, schema=NOTES_SCHEMA)
+
+
+def test_a_title_cell_stays_one_line(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "enter")
+        assert isinstance(app.screen, CellTextScreen) and not app.screen.query(TextArea)
+        await go(app, pilot, "shift+enter")
+        assert app.screen.query_one(Input).value == "Alpha"
+
+    drive(tmp_path, script)
+
+
+@pytest.fixture
+def fake_editor(monkeypatch):
+    seen = []
+
+    def edit(text, result):
+        seen.append(text)
+        return result(text)
+
+    def install(result):
+        monkeypatch.setattr(editor, "edit_text", lambda text: edit(text, result))
+        monkeypatch.setattr(NotionTUI, "_suspend_on_screen", lambda self: contextlib.nullcontext())
+        return seen
+
+    return install
+
+
+def test_shift_e_edits_the_cell_in_the_editor(tmp_path, notion, fake_editor):
+    with_notes(notion)
+    seen = fake_editor(lambda text: (0, text.replace("Goals:", "Aims:")))
+
+    async def script(app, pilot, grid):
+        await to_notes(app, pilot, grid)
+        await go(app, pilot, "E")
+        assert seen == [NOTES + "\n"]
+        saved = NOTES.replace("Goals:", "Aims:")
+        assert notion.calls == [("a", {"Notes": {"rich_text": [{"text": {"content": saved}}]}})]
+
+    drive(tmp_path, script, schema=NOTES_SCHEMA)
+
+
+def test_shift_e_saves_nothing_when_unchanged_or_on_a_bad_number(tmp_path, notion, fake_editor):
+    fake_editor(lambda text: (0, "many\n") if text.strip() == "" else (0, text))
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter", "E")  # the title, unchanged
+        grid.move_cursor(column=grid.names.index("Rating"))
+        await go(app, pilot, "E")  # "many" isn't a number
+        grid.move_cursor(column=grid.names.index("Status"))
+        await go(app, pilot, "E")  # not a text cell
+        assert notion.calls == []
 
     drive(tmp_path, script)

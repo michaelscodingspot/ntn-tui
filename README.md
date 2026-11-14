@@ -110,7 +110,9 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | `j` `k` `h` `l`, arrows | move between cells                              |
 | `tab` / `shift+tab` | next / previous cell, on to the next / previous row |
 | `g` / `G`           | first / last row                                    |
-| `enter`             | edit the cell (`space` too)                         |
+| `enter`             | edit the cell (`space` too); text cells take several lines (below) |
+| `E`                 | edit the text cell in `$EDITOR`                     |
+| `z`                 | expand the cursor's row: its cells wrapped, following the cursor (kept per database) |
 | `n`                 | new row at the bottom: type its title               |
 | `i` / `I`           | new row right below / above the cursor's row (`_ord` below) |
 | `x`                 | delete the row, to Notion's trash, without asking   |
@@ -121,6 +123,14 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | `y` / `ctrl+c`      | copy the cell's full value to the clipboard         |
 | `v`                 | back to View mode, focus stays on the right side    |
 | `esc`               | back to View mode and to the page list              |
+
+Text cells keep Notion's line breaks. On one line a cell with several lines shows its first line
+and ends with `⏬`; a long line is cut with `…`. With `z` the cursor's row grows to show its
+cells wrapped to their columns' width, up to 10 lines (`⏬` on the last when there are more);
+the other rows stay one line. `enter` on a
+text (rich text) cell opens an editor in place that grows down with the text: `enter` saves,
+`shift+enter` starts a new line (`ctrl+j` too, for terminals that don't report shift+enter),
+`esc` cancels. Titles stay one line, as in Notion.
 
 `ctrl+o` asks which repo (aut, notion-tui, jira-board, Obics, or a folder you type), then opens
 the prompt `task: <cell text>` (the cell's full text) in an editor box to change it (`ctrl+s`

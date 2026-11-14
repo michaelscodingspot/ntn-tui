@@ -88,3 +88,21 @@ def test_insert_next_to():
     database.insert_next_to(rows, {"id": "y"}, "a", False)
     database.insert_next_to(rows, {"id": "z"}, "gone", True)
     assert [r["id"] for r in rows] == ["y", "a", "x", "b", "z"]
+
+
+def test_wrap_lines_keeps_breaks_wraps_words_and_caps():
+    from notion_tui.database import natural_width, with_more_mark, wrap_lines
+    assert with_more_mark("Goals:", 10) == "Goals:  ⏬" and with_more_mark("Goals:", None) == "Goals: ⏬"
+    assert with_more_mark("abcdefgh", 6) == "abcd⏬"
+    assert wrap_lines("Goals:\n- ship it", 20) == ["Goals:", "- ship it"]
+    assert wrap_lines("one two three four", 9) == ["one two", "three", "four"]
+    assert wrap_lines("abcdefghij", 4) == ["abcd", "efgh", "ij"]
+    assert wrap_lines("", 5) == [""]
+    assert wrap_lines("\n".join("abcdef"), 4, most=3) == ["a", "b", "c ⏬"]  # the mark at the right edge
+    assert wrap_lines("\n".join(["abcd"] * 3), 4, most=2) == ["abcd", "ab⏬"]
+    assert wrap_lines("  - sub item\n- top", 20) == ["  - sub item", "- top"]  # indent kept
+    assert wrap_lines("  - one two", 8) == ["  - one", "two"]
+    assert natural_width("ab\nabcdefg", expand=True) == 7  # the longest line
+    assert natural_width("ab\nabcd", expand=True) == 5  # the first line and its mark are wider
+    assert natural_width("ab\nabcd", expand=False) == 5  # first line, a space, the two-cell mark
+    assert natural_width("ab cd", expand=False) == 5

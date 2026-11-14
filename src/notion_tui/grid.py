@@ -10,17 +10,30 @@ from textual.geometry import Offset, Region
 from textual.widgets import DataTable
 
 from .bidi import is_rtl, reorder_text
-from .database import column_widths
+from .database import MORE_LINES, column_widths, natural_width, with_more_mark, wrap_lines
 from .rows import cell_text
 
 NEW_ROW = "new-row"  # key of the row shown while its title is typed and sent
 SAVED_MARK_SECONDS = 1.5  # how long a row shows ✓ after a save
 
 
-def _cell(text: str, width: int | None) -> Text:
-    if width is not None and cell_len(text) > width:
+def _cell(text: str, width: int | None, wrap: bool) -> Text:
+    """A cell on one line, or wrapped to the column's width. A long line is cut with "…"; a cell
+    with more lines than it shows ends with the more-lines mark (one line: its first line only)."""
+    rtl = is_rtl(text)
+
+    def ordered(line: str) -> str:  # RTL words in visual order, the mark kept at the end
+        body, mark = (line[:-len(MORE_LINES)], MORE_LINES) if line.endswith(MORE_LINES) else (line, "")
+        return reorder_text(body, rtl) + mark
+
+    if wrap and width is not None:
+        return Text("\n".join(ordered(line) for line in wrap_lines(text, width)), no_wrap=True)
+    first, more = text.split("\n", 1)[0], "\n" in text
+    if more:
+        text = with_more_mark(first, width)
+    elif width is not None and cell_len(text) > width:
         text = set_cell_size(text, width - 1) + "…"  # cut the logical text, then order RTL words
-    return Text(reorder_text(text, is_rtl(text)), no_wrap=True)
+    return Text(ordered(text), no_wrap=True)
 
 
 class RowGrid(DataTable):
@@ -43,6 +56,8 @@ class RowGrid(DataTable):
         Binding("alt+k,alt+up", "app.row_move(-1)", "move row up", key_display="alt+↑"),
         Binding("alt+j,alt+down", "app.row_move(1)", "move row down", key_display="alt+↓"),
         Binding("e", "app.row_body", "row body"),
+        Binding("E", "app.cell_in_editor", "cell in $EDITOR"),
+        Binding("z", "app.db_expand", "expand row"),
         Binding("ctrl+o", "app.row_claude", "Claude task"),
         Binding("y,ctrl+c", "app.row_copy", "copy cell"),
     ]
@@ -54,6 +69,8 @@ class RowGrid(DataTable):
         self.source: list[dict] | None = None  # the rows list this grid was drawn from
         self.texts: dict[str, list[str]] = {}  # each row's cells in full, by row key, in row order
         self.widths: list[int | None] = []  # longest text each column shows; None: not laid out yet
+        self.expand = False  # the cursor's row grows to show its cells wrapped (`z`); others stay one line
+        self.expanded: str | None = None  # the row drawn wrapped now
 
     @property
     def count(self) -> int:
@@ -63,9 +80,11 @@ class RowGrid(DataTable):
     def stale(self, rows: list[dict], names: list[str]) -> bool:
         return rows is not self.source or len(rows) != self.count or names != self.names
 
-    def show(self, rows: list[dict], names: list[str]) -> None:
-        """Draw the rows, keeping the cursor on the same row and column when they are still there."""
+    def show(self, rows: list[dict], names: list[str], expand: bool) -> None:
+        """Draw the rows, keeping the cursor on the same row and column when they are still there;
+        with `expand` the cursor's row wrapped."""
         self.names, self.heads, self.source = names, [name.strip() for name in names], rows
+        self.expand = expand
         self.texts = {row["id"]: self._texts(row) for row in rows}
         self._fit()
         self._draw()
@@ -76,6 +95,7 @@ class RowGrid(DataTable):
         row_id, at = self.current_row_id, self.cursor_coordinate
         marks = {key: row.label for key, row in self.rows.items()}
         self.clear(columns=True)
+        self.expanded = None  # rows are added one line each; the cursor's row grows once it is placed
         for name, head in zip(self.names, self.heads):
             self.add_column(head, key=name)
         for key in self.texts:
@@ -83,13 +103,39 @@ class RowGrid(DataTable):
         keys = list(self.texts)
         index = keys.index(row_id) if row_id in self.texts else min(at.row, len(keys) - 1)
         self.move_cursor(row=max(index, 0), column=min(at.column, max(len(self.names) - 1, 0)), animate=False)
+        self._expand_cursor_row()
 
     def _texts(self, row: dict) -> list[str]:
         props = row.get("properties", {})
         return [cell_text(props[name]) if name in props else "" for name in self.names]
 
-    def _cells(self, row_id: str) -> list[Text]:
-        return [_cell(text, width) for text, width in zip(self.texts[row_id], self.widths)]
+    def _cells(self, row_id: str, wrap: bool = False) -> list[Text]:
+        return [_cell(text, width, wrap) for text, width in zip(self.texts[row_id], self.widths)]
+
+    def _redraw_cells(self, row_id: str, wrap: bool) -> None:
+        """Draw one row's cells again, one line or wrapped, with the row as tall as its tallest cell."""
+        cells = self._cells(row_id, wrap)
+        for name, cell in zip(self.names, cells):
+            self.update_cell(row_id, name, cell)
+        self.rows[row_id].height = max((cell.plain.count("\n") + 1 for cell in cells), default=1)
+        self._clear_caches()
+        self._require_update_dimensions = True  # the table's height changes with the row's
+
+    def _expand_cursor_row(self) -> None:
+        """With `z` on, wrap the cursor's row and put the row it left back on one line."""
+        target = self.current_row_id if self.expand else None
+        if target == self.expanded:
+            return
+        if self.expanded is not None and self.has_row(self.expanded):
+            self._redraw_cells(self.expanded, False)
+        self.expanded = target
+        if target is not None:
+            self._redraw_cells(target, True)
+            self.call_after_refresh(self._scroll_cursor_into_view)
+
+    def watch_cursor_coordinate(self, old: Coordinate, new: Coordinate) -> None:
+        super().watch_cursor_coordinate(old, new)
+        self._expand_cursor_row()
 
     def _fit(self) -> bool:
         """Share the grid's width between its columns, so text is cut only where it doesn't fit.
@@ -98,7 +144,8 @@ class RowGrid(DataTable):
         if not self.size.width:  # not laid out yet: sized on the first resize
             self.widths = [None] * len(self.names)
         else:
-            natural = [max(map(cell_len, column)) for column in zip(self.heads, *self.texts.values())]
+            natural = [max(natural_width(text, self.expand) for text in column)
+                       for column in zip(self.heads, *self.texts.values())]
             gutter = 1 + 2 * self.cell_padding  # the column of row marks
             room = self.scrollable_content_region.width - gutter - 2 * self.cell_padding * len(self.heads)
             self.widths = column_widths(natural, room)
@@ -113,9 +160,16 @@ class RowGrid(DataTable):
 
     def _changed(self, row_id: str) -> None:
         """Draw a row whose texts changed, or the whole table when that moved the column widths."""
-        if not self._refit():
-            for name, cell in zip(self.names, self._cells(row_id)):
-                self.update_cell(row_id, name, cell, update_width=True)
+        if not self._refit():  # the widths stayed: every cell already fits its column
+            self._redraw_cells(row_id, row_id == self.expanded)
+
+    def set_expand(self, on: bool) -> None:
+        """Wrap the cursor's row (as tall as its longest cell, following the cursor) or keep every row on one line."""
+        if on != self.expand:
+            self.expand = on
+            if self.texts:
+                self._fit()
+                self._draw()
 
     def on_resize(self) -> None:
         if self.texts:
