@@ -53,3 +53,18 @@ def test_expand_row_is_kept_per_database_next_to_edit_mode(tmp_path):
     assert cache.db_expand_row("ds") and cache.db_edit_mode("ds") and not cache.db_expand_row("other")
     cache.put_db_expand_row("ds", False)
     assert not cache.db_expand_row("ds") and cache.db_edit_mode("ds")
+
+
+def test_pins_keep_pin_order_and_forget_drops_them(tmp_path):
+    cache = Cache(tmp_path / "cache.db")
+    a, b, c = (Page(i, i, "2026-01-01", "", "workspace", "") for i in "abc")
+    cache.upsert_pages([a, b])
+    cache.set_pinned(c, True)  # not cached yet: pinning adds its row
+    cache.set_pinned(a, True)
+    cache.set_pinned(c, True)  # pinning twice keeps the first place
+    assert [p.id for p in cache.pinned_pages()] == ["c", "a"]
+    cache.set_pinned(c, False)
+    assert [p.id for p in cache.pinned_pages()] == ["a"]
+    cache.forget("a")
+    cache.upsert_pages([a])
+    assert cache.pinned_pages() == []

@@ -40,12 +40,13 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `g` / `G`      | top / bottom (bottom loads more)         |
 | `enter`        | open page full screen                    |
 | `esc`          | back to list / clear search              |
-| `tab`          | cycle search → list → preview            |
+| `tab`          | search → list → preview; grid: next cell |
 | `w`            | switch list ↔ preview (skips search)     |
 | `/`            | search (instant from cache, then Notion) |
 | `e`            | edit page in `$VISUAL` / `$EDITOR`; on a database, the Edit mode grid |
 | `n`            | new page: title and place, then `$EDITOR` |
 | `x`            | delete page or database: moves to trash (asks first) |
+| `p`            | pin / unpin page: pinned pages stay on top, marked 📌 |
 | `o`            | open page in Notion web app, focus tab   |
 | `l`            | links and images in page: pick one       |
 | `backspace`    | back to the page a link came from        |
@@ -107,6 +108,7 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | Key                 | In the grid                                         |
 |---------------------|-----------------------------------------------------|
 | `j` `k` `h` `l`, arrows | move between cells                              |
+| `tab` / `shift+tab` | next / previous cell, on to the next / previous row |
 | `g` / `G`           | first / last row                                    |
 | `enter`             | edit the cell (`space` too); text cells take several lines (below) |
 | `E`                 | edit the text cell in `$EDITOR`                     |
@@ -253,7 +255,7 @@ through `narrow-window-watcher.py` in my-automations, which saves the setting in
   breadcrumb has its words put in visual order (Unicode bidi algorithm), letters untouched.
   The preview right-aligns paragraphs whose first letter is RTL, as Notion does.
   Single line breaks are kept, since Notion writes one block per line.
-- SQLite cache at `~/.cache/notion-tui/cache.db` (`pages`, `page_content`, and for databases `views`,
+- SQLite cache at `~/.cache/notion-tui/cache.db` (`pages`, `page_content`, `pinned`, and for databases `views`,
   `data_source_schema`, `db_state`) makes startup
   instant and previews appear before Notion answers. A cached preview is reused while the
   page's `last_edited` is unchanged. The row below the cursor is prefetched.
@@ -270,6 +272,9 @@ through `narrow-window-watcher.py` in my-automations, which saves the setting in
   a minute while a dialog is open or an edit, save or fetch of the page is running.
 - The rows query is the view's filter AND the filter line, and the sort picker's sort, else
   the view's. Properties are referred to by ID, so renamed properties keep working.
+- Pinned pages (`p`) are kept in the `pinned` table, in pin order, and drawn first in the
+  recent list (a search shows the pinned pages it finds first). Startup begins on the topmost
+  row, and stays there when Notion's fresh list comes in. A trashed or vanished page loses its pin.
 - Whether an entry has content is checked once per edit with
   `ntn api v1/blocks/<id>/children` (2 at a time, to stay under Notion's rate limit) and kept
   in `pages.has_body`. A new `last_edited` clears it, so the next list load checks again.

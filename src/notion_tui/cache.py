@@ -15,6 +15,12 @@ from .ntn import Node, Page, View
 
 MAX_DEPTH = 12  # guard against cycles or absurdly deep trees
 
+# Columns of a Page, in order, from the `pages` table and its parent in `nodes`.
+_PAGE_SELECT = (
+    "SELECT p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), p.kind "
+    "FROM pages p LEFT JOIN nodes n ON n.id = p.id "
+)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages (
     id          TEXT PRIMARY KEY,
@@ -73,6 +79,12 @@ CREATE TABLE IF NOT EXISTS db_state (
     -- edit_mode   INTEGER: 1 = rows open in the Edit grid (added by migration)
     -- expand_row  INTEGER: 1 = the Edit grid shows the cursor's row wrapped, `z` (added by migration)
 );
+
+-- Pages and databases pinned to the top of the list, in the order they were pinned.
+CREATE TABLE IF NOT EXISTS pinned (
+    page_id   TEXT PRIMARY KEY,
+    pinned_at REAL NOT NULL
+);
 """
 
 
@@ -100,20 +112,35 @@ class Cache:
                 self.db.execute("ALTER TABLE db_state ADD COLUMN expand_row INTEGER NOT NULL DEFAULT 0")
 
     def recent_pages(self, limit: int = 200) -> list[Page]:
-        rows = self.db.execute(
-            "SELECT p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), p.kind "
-            "FROM pages p LEFT JOIN nodes n ON n.id = p.id ORDER BY p.last_edited DESC LIMIT ?",
-            (limit,),
-        )
+        rows = self.db.execute(_PAGE_SELECT + "ORDER BY p.last_edited DESC LIMIT ?", (limit,))
         return [Page(*row) for row in rows]
+
+    def pinned_pages(self) -> list[Page]:
+        """Pinned pages that are still cached, first pinned first."""
+        rows = self.db.execute(_PAGE_SELECT + "JOIN pinned x ON x.page_id = p.id ORDER BY x.pinned_at")
+        return [Page(*row) for row in rows]
+
+    def set_pinned(self, page: Page, on: bool) -> None:
+        """Pin or unpin a page. Pins list only cached pages, so a pinned page not cached yet
+        (one reached by a link) gets its `pages` row; a cached row is left as it is."""
+        if not on:
+            with self.db:
+                self.db.execute("DELETE FROM pinned WHERE page_id = ?", (page.id,))
+            return
+        with self.db:
+            self.db.execute(
+                "INSERT OR IGNORE INTO pages (id, title, last_edited, url, seen_at, kind) VALUES (?, ?, ?, ?, ?, ?)",
+                (page.id, page.title, page.last_edited, page.url, time.time(), page.kind),
+            )
+            self.db.execute("INSERT OR IGNORE INTO pinned (page_id, pinned_at) VALUES (?, ?)", (page.id, time.time()))
+        if page.parent_kind:
+            self.put_nodes([Node(page.id, page.kind, page.title, page.parent_kind, page.parent_id)])
 
     def find_page(self, notion_id: str) -> Page | None:
         """The listed page or database a Notion link points at (ID as 32 hex digits). A database's
         link carries the database's ID, which only its URL holds: the list shows its data source."""
         row = self.db.execute(
-            "SELECT p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), p.kind "
-            "FROM pages p LEFT JOIN nodes n ON n.id = p.id "
-            "WHERE replace(p.id, '-', '') = ? OR replace(p.url, '-', '') LIKE ? LIMIT 1",
+            _PAGE_SELECT + "WHERE replace(p.id, '-', '') = ? OR replace(p.url, '-', '') LIKE ? LIMIT 1",
             (notion_id, f"%{notion_id}"),
         ).fetchone()
         return Page(*row) if row else None
@@ -199,6 +226,7 @@ class Cache:
             self.db.execute("DELETE FROM page_content WHERE page_id = ?", (page_id,))
             self.db.execute("DELETE FROM pages WHERE id = ?", (page_id,))
             self.db.execute("DELETE FROM nodes WHERE id = ?", (page_id,))
+            self.db.execute("DELETE FROM pinned WHERE page_id = ?", (page_id,))
             for table in ("views", "data_source_schema", "db_state"):
                 self.db.execute(f"DELETE FROM {table} WHERE data_source_id = ?", (page_id,))
 

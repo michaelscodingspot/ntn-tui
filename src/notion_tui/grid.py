@@ -42,6 +42,8 @@ class RowGrid(DataTable):
         Binding("k", "cursor_up", "up", show=False),
         Binding("h", "cursor_left", "left", show=False),
         Binding("l", "cursor_right", "right", show=False),
+        Binding("tab", "next_cell(1)", "next cell", show=False),
+        Binding("shift+tab", "next_cell(-1)", "previous cell", show=False),
         Binding("g", "scroll_top", "first row", show=False),
         Binding("G", "scroll_bottom", "last row", show=False),
         Binding("enter", "select_cursor", "edit cell"),
@@ -172,6 +174,17 @@ class RowGrid(DataTable):
     def on_resize(self) -> None:
         if self.texts:
             self._refit()
+
+    def action_next_cell(self, step: int) -> None:
+        """Tab / shift+tab: the next / previous cell, going on to the next / previous row at a row's end;
+        tab stays in the grid instead of moving the focus to another pane."""
+        columns = len(self.names)
+        if not columns or not self.row_count:
+            return
+        self._set_hover_cursor(False)  # as the arrow keys do: the cell under the mouse stops looking current
+        at = self.cursor_coordinate
+        index = min(max(at.row * columns + at.column + step, 0), self.row_count * columns - 1)
+        self.move_cursor(row=index // columns, column=index % columns, animate=True)
 
     @property
     def current_row_id(self) -> str | None:
