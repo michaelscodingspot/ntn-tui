@@ -191,7 +191,6 @@ def test_order_moves_stop_at_the_edges():
 def test_order_moves_split_equal_values():
     assert rows.order_moves([1, 3, 3], 1, 1) == {2: 3, 1: 4}  # at the bottom: the lower row goes on top, the other past it
     assert rows.order_moves([3, 3], 0, 1) == {1: 3, 0: 4}
-    assert rows.order_moves([1, 3, 3, 4], 1, 1) == {2: 2, 1: 3}  # between two rows: spread out
 
 
 def test_order_moves_spread_the_pair_between_its_neighbours():
@@ -199,7 +198,9 @@ def test_order_moves_spread_the_pair_between_its_neighbours():
     assert rows.order_moves([5, 13, 14, 20], 2, -1) == {2: 10, 1: 15}
     assert rows.order_moves([5, 13, 14, 19], 1, 1) == {2: 10, 1: 14}  # rounded to whole numbers
     assert rows.order_moves([1, 1.2, 1.4, 2], 1, 1) == pytest.approx({2: 4 / 3, 1: 5 / 3})  # too close for whole numbers
+    assert rows.order_moves([1, 3, 3, 4], 1, 1) == {2: 2, 1: 3}  # an equal pair spreads out too
     assert rows.order_moves([5, 7, 7, 5], 1, 1) == {2: 7, 1: 8}  # neighbours out of order: plain swap rules
+    assert rows.order_moves([1, 1, 1 + 2e-16, 1 + 4e-16], 1, 1) == {1: 1 + 2e-16, 2: 1}  # gap too small to split: swap
     assert rows.order_moves([20, 14, 13, 5], 1, 1, descending=True) == {2: 15, 1: 10}
 
 
