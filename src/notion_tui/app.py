@@ -20,7 +20,7 @@ from textual.widget import Widget
 from textual.widgets import Footer, Input, Label, ListItem, ListView, Markdown, Static
 
 from . import claude, desktop, editor, narrow, ntn, query, rows as row_edit
-from .bidi import BidiMarkdown, BidiMixin, is_rtl, reorder_text
+from .bidi import BidiMarkdown, BidiMixin
 from .cache import MAX_DEPTH, Cache
 from .database import (
     rows_key,
@@ -44,6 +44,7 @@ from .database import (
 from .grid import NEW_ROW, RowGrid
 from .links import Link, notion_id, notion_links_to_markdown, page_links, same_file
 from .modals import (
+    EditChoiceScreen,
     CellPickScreen,
     CellTextScreen,
     ConfirmScreen,
@@ -63,6 +64,7 @@ SEARCH_DEBOUNCE = 0.4  # seconds to wait after typing stops before asking Notion
 LOAD_MORE_MARGIN = 5  # fetch the next batch when the cursor is this close to the end
 BODY_CHECKS = 2  # parallel ntn calls when checking which database entries have content
 DETAILS_DEBOUNCE = 0.2  # seconds to wait after the grid's cursor stops before showing its row's page in the details pane
+
 VIEW_FETCHES = 2  # parallel ntn calls when fetching a database's views
 WATCH_SECONDS = 60  # how often the focused page is checked for changes made elsewhere
 RECENT_EDIT = timedelta(minutes=2)  # Notion's edit time has minute steps: content edited this recently is compared too
@@ -75,6 +77,11 @@ _PROPERTY = re.compile(r"^'?([^':][^:]*?)'?:\s*(.*)$")
 _BR = re.compile(r"<br\s*/?>")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
 _EMPTY_VALUES = {"", "null", "[]", "''", '""', "false"}
+
+
+def _md_escape(text: str) -> str:
+    """Plain text shown as Markdown as is: its Markdown characters backslash-escaped."""
+    return re.sub(r"([\\`*_\[\]<>#!|~])", r"\\\1", text)
 
 
 def split_page(md: str, title: str) -> tuple[list[tuple[str, str]], str]:
@@ -158,8 +165,10 @@ class PageList(ListView):
         Binding("k", "cursor_up", "up", show=False),
         Binding("g", "first", "top", show=False),
         Binding("G", "last", "bottom", show=False),
+        Binding("enter", "app.browser", "open in Notion"),
+        Binding("right", "app.open_preview", "open", key_display="→"),
         # Only while a grid is showing; otherwise `l` falls through to the app's links key.
-        Binding("right,l", "app.focus_grid", "go to grid", key_display="→"),
+        Binding("l", "app.focus_grid", "go to grid", show=False),
     ]
 
     def action_first(self) -> None:
@@ -530,6 +539,10 @@ class NotionTUI(App):
         self._preview_timer = self.set_timer(PREVIEW_DEBOUNCE, self._show_current)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.action_open_preview()  # a click; enter opens the page in Notion
+
+    def action_open_preview(self) -> None:
+        """Preview side at full width, focused (the grid when it is showing)."""
         self.screen.add_class("full")
         self._focus_preview()
 
@@ -1399,16 +1412,13 @@ class NotionTUI(App):
     def _details_text(self, page: Page, markdown: str) -> str:
         """The page's body without its properties (the grid shows those)."""
         body = split_page(markdown, page.title)[1] if markdown else ""
-        return body or "_No details yet. Press e to write some._"
+        return body or "_No details yet. Press alt+e to write some._"
 
     async def _render_details(self, title: str, content: str) -> None:
-        head = Text(no_wrap=True, overflow="ellipsis", style="dim")
-        head.append("── ")
+        """The pane's key line, then the whole title (wrapped, every line of it) above the body."""
+        self.query_one("#details-head", Static).update(Text("── d hide · D open · alt+e edit ──", style="dim"))
         if title:
-            head.append(reorder_text(title, is_rtl(title)), style="bold")
-            head.append(" ── ")
-        head.append("d hide · D open · e edit")
-        self.query_one("#details-head", Static).update(head)
+            content = f"**{_md_escape(title)}**\n\n{content}"
         await self.query_one("#details-body", Markdown).update(content)
         self.query_one("#details-scroll").scroll_home(animate=False)
 
@@ -1440,6 +1450,30 @@ class NotionTUI(App):
         if found and self.current:
             self._link_history.append(self.current)
             self.call_later(self._go_to, ntn.row_page(found[1]))
+
+    def action_row_browser(self) -> None:
+        """Enter in the grid: the cursor row's page in Notion when it has content (≡), otherwise the database."""
+        found = self._cursor_row()
+        if found and found[1]["id"] in self.query_one(RowGrid).bodies:
+            page = ntn.row_page(found[1])
+            if page.url:
+                desktop.open_url(page.url)
+                self.raise_browser(page)
+                return
+        self.action_browser()
+
+    def action_row_edit(self) -> None:
+        """`e` in the grid: a small popup asks whether to edit the cell or the row's page body."""
+        if not self._cursor_row():
+            return
+
+        def chosen(what: str | None) -> None:
+            if what == "cell":
+                self.query_one(RowGrid).action_select_cursor()
+            elif what == "body":
+                self.action_row_body()
+
+        self.push_screen(EditChoiceScreen(), chosen)
 
     def action_row_body(self) -> None:
         found = self._cursor_row()

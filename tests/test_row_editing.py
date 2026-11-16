@@ -12,7 +12,7 @@ from notion_tui.app import NotionTUI, PageList, PreviewScroll
 from notion_tui.cache import Cache
 from notion_tui.grid import RowGrid
 from notion_tui.links import Link
-from notion_tui.modals import CellPickScreen, CellTextScreen, LinkPickScreen, PromptEditScreen, RepoPickScreen
+from notion_tui.modals import CellPickScreen, CellTextScreen, EditChoiceScreen, LinkPickScreen, PromptEditScreen, RepoPickScreen
 from notion_tui.ntn import NtnError, Page, View
 from notion_tui.options import Options
 
@@ -253,7 +253,7 @@ def test_e_goes_into_edit_mode_and_the_grid(tmp_path, notion):
 
 def test_esc_leaves_edit_mode(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter")
+        await go(app, pilot, "right")
         assert grid.has_focus and app.screen.has_class("full")
         await go(app, pilot, "escape")
         assert not grid.display and app.query_one(PreviewScroll).has_focus
@@ -321,7 +321,7 @@ def test_a_view_notion_refuses_heals_from_fresh_views(tmp_path, notion, monkeypa
 
 def test_board_view_stays_in_view_mode(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "right_square_bracket")
+        await go(app, pilot, "right", "right_square_bracket")
         assert not grid.display and app.query_one(PreviewScroll).has_focus
         await go(app, pilot, "v")
         assert not grid.display and app.cache.db_edit_mode("ds")
@@ -335,9 +335,9 @@ def test_board_view_stays_in_view_mode(tmp_path, notion):
 
 def test_edit_a_text_cell(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "j")
+        await go(app, pilot, "right", "j")
         assert grid.current_row_id == "b"
-        await go(app, pilot, "enter")
+        await go(app, pilot, "ctrl+e")
         assert isinstance(app.screen, CellTextScreen)
         assert app.screen.query_one(Input).value == "Beta"
         await go(app, pilot, "2", "enter")
@@ -353,7 +353,7 @@ def test_copy_a_cell(tmp_path, notion, key):
     async def script(app, pilot, grid):
         copied = []
         app.copy_to_clipboard = copied.append
-        await go(app, pilot, "enter", "j", key)
+        await go(app, pilot, "right", "j", key)
         assert copied == ["Beta"]
         assert app.is_running  # ctrl+c copies here, it doesn't ask to quit
         await go(app, pilot, "l", key)  # Status is empty: nothing copied
@@ -369,7 +369,7 @@ def test_copy_gives_the_full_text_not_the_cut_cell(tmp_path, notion):
     async def script(app, pilot, grid):
         copied = []
         app.copy_to_clipboard = copied.append
-        await go(app, pilot, "enter", "y")
+        await go(app, pilot, "right", "y")
         assert "…" in cell(grid, "a", "Name")  # the cell is cut short
         assert copied == [long.strip()]
 
@@ -381,7 +381,7 @@ def test_copy_waits_for_a_save(tmp_path, notion):
         copied = []
         app.copy_to_clipboard = copied.append
         notion.write_gate = asyncio.Event()
-        await go(app, pilot, "enter", "enter", "2")
+        await go(app, pilot, "right", "ctrl+e", "2")
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("y")  # the row shows … : the old value isn't copied
@@ -397,7 +397,7 @@ def test_copy_waits_for_a_save(tmp_path, notion):
 
 def test_unchanged_text_is_not_saved(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "enter", "enter")
+        await go(app, pilot, "right", "ctrl+e", "enter")
         assert notion.calls == []
 
     drive(tmp_path, script)
@@ -405,7 +405,7 @@ def test_unchanged_text_is_not_saved(tmp_path, notion):
 
 def test_bad_number_keeps_the_editor_open(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "l", "l", "l", "enter", "x", "enter")
+        await go(app, pilot, "right", "l", "l", "l", "ctrl+e", "x", "enter")
         assert isinstance(app.screen, CellTextScreen) and notion.calls == []
         await go(app, pilot, "backspace", "4", "enter")
         assert cell(grid, "a", "Rating") == "4"
@@ -416,7 +416,7 @@ def test_bad_number_keeps_the_editor_open(tmp_path, notion):
 
 def test_pick_a_select_option(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "l", "enter")
+        await go(app, pilot, "right", "l", "space")
         assert isinstance(app.screen, CellPickScreen)
         await go(app, pilot, "j", "enter")
         assert cell(grid, "a", "Status") == "Done"
@@ -427,7 +427,7 @@ def test_pick_a_select_option(tmp_path, notion):
 
 def test_add_a_new_select_option(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "l", "enter", "a", "N", "e", "w", "enter")
+        await go(app, pilot, "right", "l", "ctrl+e", "a", "N", "e", "w", "enter")
         assert cell(grid, "a", "Status") == "New"
         assert "New" in app.cache.schema("ds")[1]["options"]
 
@@ -436,7 +436,7 @@ def test_add_a_new_select_option(tmp_path, notion):
 
 def test_tick_multi_select_options(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "l", "l", "enter", "space", "j", "space", "enter")
+        await go(app, pilot, "right", "l", "l", "ctrl+e", "space", "j", "space", "enter")
         assert cell(grid, "a", "Tags") == "Tech, Fiction"
         assert notion.calls == [("a", {"Tags": {"multi_select": [{"name": "Tech"}, {"name": "Fiction"}]}})]
 
@@ -445,7 +445,7 @@ def test_tick_multi_select_options(tmp_path, notion):
 
 def test_checkbox_flips_at_once(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "l", "l", "l", "l", "space")
+        await go(app, pilot, "right", "l", "l", "l", "l", "space")
         assert cell(grid, "a", "Owned") == "✓"
         assert notion.calls == [("a", {"Owned": {"checkbox": True}})]
 
@@ -454,7 +454,7 @@ def test_checkbox_flips_at_once(tmp_path, notion):
 
 def test_read_only_cell_opens_nothing(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "l", "l", "l", "l", "l", "enter")
+        await go(app, pilot, "right", "l", "l", "l", "l", "l", "ctrl+e")
         assert not isinstance(app.screen, (CellTextScreen, CellPickScreen)) and notion.calls == []
 
     drive(tmp_path, script)
@@ -463,7 +463,7 @@ def test_read_only_cell_opens_nothing(tmp_path, notion):
 def test_failed_save_puts_the_old_value_back(tmp_path, notion):
     async def script(app, pilot, grid):
         notion.fail = True
-        await go(app, pilot, "enter", "enter", "2", "enter")
+        await go(app, pilot, "right", "ctrl+e", "2", "enter")
         assert cell(grid, "a", "Name") == "Alpha"
 
     drive(tmp_path, script)
@@ -471,7 +471,7 @@ def test_failed_save_puts_the_old_value_back(tmp_path, notion):
 
 def test_new_row(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "n")
+        await go(app, pilot, "right", "n")
         assert isinstance(app.screen, CellTextScreen)
         await go(app, pilot, "G", "a", "m", "m", "a", "enter")
         assert grid.row_count == 3 and notion.rows[-1]["properties"]["Name"]["title"][0]["plain_text"] == "Gamma"
@@ -482,7 +482,7 @@ def test_new_row(tmp_path, notion):
 
 def test_insert_row_below_and_above(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "i")  # below Alpha, the first row
+        await go(app, pilot, "right", "i")  # below Alpha, the first row
         assert isinstance(app.screen, CellTextScreen) and grid.get_row_index("new-row") == 1
         await go(app, pilot, "Z", "enter")
         assert list(grid.texts) == ["a", "new2", "b"] and grid.current_row_id == "new2"
@@ -495,7 +495,7 @@ def test_insert_row_below_and_above(tmp_path, notion):
 
 def test_insert_row_cancelled(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "I", "escape")
+        await go(app, pilot, "right", "I", "escape")
         assert list(grid.texts) == ["a", "b"] and len(notion.rows) == 2
 
     drive(tmp_path, script)
@@ -517,7 +517,7 @@ def test_insert_row_sets_ord_between_neighbours(tmp_path, notion):
         return next(r for r in notion.rows if r["id"] == row_id)["properties"]["_ord"]["number"]
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "i", "Z", "enter")  # between Alpha (1) and Beta (2)
+        await go(app, pilot, "right", "i", "Z", "enter")  # between Alpha (1) and Beta (2)
         assert ord_of("new2") == 1.5
         await go(app, pilot, "g", "I", "Y", "enter")  # above the first row
         assert ord_of("new3") == 0
@@ -532,7 +532,7 @@ def test_new_row_goes_past_the_highest_ord(tmp_path, notion):
     with_ord(notion, 1, 2)
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "n", "Z", "enter")
+        await go(app, pilot, "right", "n", "Z", "enter")
         assert notion.rows[-1]["properties"]["_ord"]["number"] == 10
         assert list(grid.texts) == ["a", "b", "new2"]
 
@@ -544,7 +544,7 @@ def test_new_row_when_notion_wont_say_the_highest_ord(tmp_path, notion):
 
     async def script(app, pilot, grid):
         notion.fail = True
-        await go(app, pilot, "enter", "n", "Z", "enter")
+        await go(app, pilot, "right", "n", "Z", "enter")
         assert list(grid.texts) == ["a", "b"] and len(notion.rows) == 2
 
     drive(tmp_path, script, schema=ORD_SCHEMA)
@@ -554,7 +554,7 @@ def test_new_row_when_no_row_has_an_ord(tmp_path, notion):
     with_ord(notion, None, None)
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "n", "Z", "enter")
+        await go(app, pilot, "right", "n", "Z", "enter")
         assert notion.rows[-1]["properties"]["_ord"]["number"] == 8
 
     drive(tmp_path, script, schema=ORD_SCHEMA)
@@ -565,7 +565,7 @@ def test_insert_below_a_row_without_ord_goes_past_the_highest(tmp_path, notion):
     notion.cursor = "more"  # the highest comes from Notion, not the loaded rows: no need for m
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "i", "Z", "enter")  # below Alpha, which has no _ord
+        await go(app, pilot, "right", "i", "Z", "enter")  # below Alpha, which has no _ord
         assert notion.rows[-1]["properties"]["_ord"]["number"] == 13
         assert list(grid.texts) == ["a", "new2", "b"]
         await go(app, pilot, "k", "I", "Y", "enter")  # above it: no _ord is set
@@ -579,7 +579,7 @@ def test_insert_below_the_last_loaded_row_asks_for_more_rows(tmp_path, notion):
     notion.cursor = "more"  # the next row's _ord isn't known
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "G", "i")
+        await go(app, pilot, "right", "G", "i")
         assert not isinstance(app.screen, CellTextScreen) and list(grid.texts) == ["a", "b"]
         await go(app, pilot, "I", "Y", "enter")  # above it, both neighbours are loaded
         assert list(grid.texts) == ["a", "new2", "b"]
@@ -590,7 +590,7 @@ def test_insert_below_the_last_loaded_row_asks_for_more_rows(tmp_path, notion):
 def test_inserted_row_goes_last_when_its_neighbour_was_deleted(tmp_path, notion):
     async def script(app, pilot, grid):
         notion.create_gate = asyncio.Event()
-        await pilot.press("enter", "i", "Z", "enter")  # below Alpha; Notion holds the create
+        await pilot.press("right", "i", "Z", "enter")  # below Alpha; Notion holds the create
         await pilot.pause(0.1)
         await pilot.press("k", "x")  # Alpha goes before the new row is back
         await pilot.pause(0.1)
@@ -631,7 +631,7 @@ def test_r_keeps_the_old_preview_until_the_fresh_rows_come(tmp_path, notion):
 
 def test_new_row_cancelled(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "n", "escape")
+        await go(app, pilot, "right", "n", "escape")
         assert grid.row_count == 2 and len(notion.rows) == 2
         assert grid.has_focus
 
@@ -641,7 +641,7 @@ def test_new_row_cancelled(tmp_path, notion):
 def test_failed_new_row_goes_away(tmp_path, notion):
     async def script(app, pilot, grid):
         notion.fail = True
-        await go(app, pilot, "enter", "n", "Z", "enter")
+        await go(app, pilot, "right", "n", "Z", "enter")
         assert grid.row_count == 2
 
     drive(tmp_path, script)
@@ -649,7 +649,7 @@ def test_failed_new_row_goes_away(tmp_path, notion):
 
 def test_delete_and_undo(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "x")
+        await go(app, pilot, "right", "x")
         assert grid.row_count == 1 and [r["id"] for r in notion.rows] == ["b"]
         await go(app, pilot, "u")
         assert grid.row_count == 2 and [r["id"] for r in notion.rows] == ["a", "b"]
@@ -663,7 +663,7 @@ def test_delete_and_undo(tmp_path, notion):
 def test_failed_delete_puts_the_row_back(tmp_path, notion):
     async def script(app, pilot, grid):
         notion.fail = True
-        await go(app, pilot, "enter", "x")
+        await go(app, pilot, "right", "x")
         assert grid.row_count == 2 and grid.current_row_id == "a"
         await go(app, pilot, "u")
         assert grid.row_count == 2  # nothing to undo: it never left
@@ -673,7 +673,7 @@ def test_failed_delete_puts_the_row_back(tmp_path, notion):
 
 def test_delete_every_row_then_add(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "x", "x")
+        await go(app, pilot, "right", "x", "x")
         assert grid.row_count == 0
         await go(app, pilot, "n", "Z", "enter")
         assert grid.row_count == 1
@@ -698,7 +698,7 @@ def order_of(app):
 @pytest.mark.parametrize("down, up", [("alt+j", "alt+k"), ("alt+down", "alt+up")])
 def test_alt_keys_move_a_row_and_the_cursor_stays_on_it(tmp_path, notion, down, up):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", down)
+        await go(app, pilot, "right", down)
         assert list(grid.texts) == ["b", "a", "c"] and grid.current_row_id == "a"
         assert order_of(app) == [("b", 1), ("a", 2), ("c", 3)]
         assert sorted(notion.calls) == [("a", {"_ord": {"number": 2}}), ("b", {"_ord": {"number": 1}})]
@@ -711,7 +711,7 @@ def test_alt_keys_move_a_row_and_the_cursor_stays_on_it(tmp_path, notion, down, 
 
 def test_moving_up_from_the_top_row_does_nothing(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "alt+k")
+        await go(app, pilot, "right", "alt+k")
         assert list(grid.texts) == ["a", "b"] and notion.calls == []
 
     drive_ordered(tmp_path, notion, script, [1, 2])
@@ -719,7 +719,7 @@ def test_moving_up_from_the_top_row_does_nothing(tmp_path, notion):
 
 def test_moving_a_row_spreads_the_pair_between_the_rows_around_it(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "j", "alt+j")
+        await go(app, pilot, "right", "j", "alt+j")
         assert list(grid.texts) == ["a", "c", "b", "d"] and grid.current_row_id == "b"
         assert order_of(app) == [("a", 5), ("c", 10), ("b", 15), ("d", 20)]
         assert sorted(notion.calls) == [("b", {"_ord": {"number": 15}}), ("c", {"_ord": {"number": 10}})]
@@ -730,7 +730,7 @@ def test_moving_a_row_spreads_the_pair_between_the_rows_around_it(tmp_path, noti
 
 def test_moving_past_an_empty_order_numbers_both_rows(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "alt+j")
+        await go(app, pilot, "right", "alt+j")
         assert order_of(app) == [("b", 1), ("a", 2)] and grid.current_row_id == "a"
 
     drive_ordered(tmp_path, notion, script, [1, None])
@@ -738,7 +738,7 @@ def test_moving_past_an_empty_order_numbers_both_rows(tmp_path, notion):
 
 def test_moving_in_a_descending_order(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "alt+j")
+        await go(app, pilot, "right", "alt+j")
         assert order_of(app) == [("b", 5), ("a", 4)] and grid.current_row_id == "a"
 
     drive_ordered(tmp_path, notion, script, [5, 5], direction="descending")
@@ -746,7 +746,7 @@ def test_moving_in_a_descending_order(tmp_path, notion):
 
 def test_rows_not_sorted_by_order_stay_put(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "alt+j")
+        await go(app, pilot, "right", "alt+j")
         assert list(grid.texts) == ["a", "b"] and notion.calls == []
 
     drive_ordered(tmp_path, notion, script, [1, 2], direction=None)
@@ -755,7 +755,7 @@ def test_rows_not_sorted_by_order_stay_put(tmp_path, notion):
 def test_a_cell_save_landing_after_a_move_keeps_the_new_order(tmp_path, notion):
     async def script(app, pilot, grid):
         notion.write_gate = asyncio.Event()
-        await pilot.press("enter", "enter", "2", "enter", "alt+j")  # the title save is still on its way
+        await pilot.press("right", "ctrl+e", "2", "enter", "alt+j")  # the title save is still on its way
         await pilot.pause()
         notion.write_gate.set()
         await settle(app, pilot)
@@ -768,7 +768,7 @@ def test_failed_move_brings_back_notions_order_and_drops_the_moves_after_it(tmp_
     async def script(app, pilot, grid):
         notion.fail = True
         notion.write_gate = asyncio.Event()
-        await pilot.press("enter", "alt+j", "alt+j")
+        await pilot.press("right", "alt+j", "alt+j")
         await pilot.pause()
         notion.write_gate.set()
         await settle(app, pilot)
@@ -888,7 +888,7 @@ def test_ctrl_o_asks_the_repo_and_starts_claude_on_the_cell_text(tmp_path, notio
     monkeypatch.setattr(claude, "start_session", fake_start)
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "j", "ctrl+o")
+        await go(app, pilot, "right", "j", "ctrl+o")
         assert isinstance(app.screen, RepoPickScreen)
         await go(app, pilot, "j", "enter")  # notion-tui
         assert isinstance(app.screen, PromptEditScreen) and started == []
@@ -900,7 +900,7 @@ def test_ctrl_o_asks_the_repo_and_starts_claude_on_the_cell_text(tmp_path, notio
 
 def test_a_long_title_fills_the_grid_width(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "enter")
+        await go(app, pilot, "right", "ctrl+e")
         app.screen.query_one(Input).value = "word " * 40
         await go(app, pilot, "enter")
         shown = cell(grid, "a", "Name")
@@ -929,7 +929,7 @@ def test_ctrl_o_other_repo_is_typed(tmp_path, notion, monkeypatch):
     monkeypatch.setattr(claude, "start_session", fake_start)
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "ctrl+o")
+        await go(app, pilot, "right", "ctrl+o")
         await go(app, pilot, *["j"] * len(claude.REPOS), "enter")
         await go(app, pilot, *"blog", "enter", "ctrl+s")
         assert started == [claude.Repo("blog", "/c/blog")]
@@ -942,7 +942,7 @@ def test_ctrl_o_cancelled_starts_nothing(tmp_path, notion, monkeypatch):
     monkeypatch.setattr(claude, "start_session", lambda *a: started.append(a))
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "ctrl+o", "escape")
+        await go(app, pilot, "right", "ctrl+o", "escape")
         assert not isinstance(app.screen, RepoPickScreen) and started == []
 
     drive(tmp_path, script)
@@ -953,7 +953,7 @@ def test_ctrl_o_prompt_cancelled_starts_nothing(tmp_path, notion, monkeypatch):
     monkeypatch.setattr(claude, "start_session", lambda *a: started.append(a))
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "ctrl+o", "enter", "escape")
+        await go(app, pilot, "right", "ctrl+o", "enter", "escape")
         assert not isinstance(app.screen, PromptEditScreen) and started == []
 
     drive(tmp_path, script)
@@ -963,7 +963,7 @@ def test_more_rows_than_fit_still_fill_the_width_without_scrolling_sideways(tmp_
     notion.rows = [row(f"r{i}", f"{i} " + "word " * 30) for i in range(60)] + [row("he", "שלום " * 30)]
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter")
+        await go(app, pilot, "right")
         room = grid.scrollable_content_region.width
         assert grid.virtual_size.height > grid.size.height  # taller than the pane
         assert room - 4 <= grid.virtual_size.width <= room
@@ -1013,7 +1013,7 @@ def with_notes(notion, text=NOTES):
 
 
 async def to_notes(app, pilot, grid):
-    await go(app, pilot, "enter")
+    await go(app, pilot, "right")
     grid.move_cursor(row=0, column=grid.names.index("Notes"))
     await settle(app, pilot)
 
@@ -1023,7 +1023,7 @@ def test_z_expands_only_the_cursor_row_and_is_remembered(tmp_path, notion):
     notion.rows[1]["properties"]["Notes"]["rich_text"] = [{"plain_text": "one\ntwo"}]
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter")
+        await go(app, pilot, "right")
         assert grid.rows["a"].height == grid.rows["b"].height == 1
         notes = cell(grid, "a", "Notes")
         assert notes.startswith("Goals: ") and notes.endswith("⏬") and "ship" not in notes  # first line + mark
@@ -1047,7 +1047,7 @@ def test_deleting_the_expanded_row_expands_the_next(tmp_path, notion):
     notion.rows[1]["properties"]["Notes"]["rich_text"] = [{"plain_text": "one\na much longer second line here"}]
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "z")
+        await go(app, pilot, "right", "z")
         assert grid.rows["a"].height == 3
         await go(app, pilot, "x")
         assert not grid.has_row("a") and grid.current_row_id == "b" and grid.rows["b"].height == 2
@@ -1070,7 +1070,7 @@ def test_text_cell_edits_across_lines(tmp_path, notion):
 
     async def script(app, pilot, grid):
         await to_notes(app, pilot, grid)
-        await go(app, pilot, "z", "enter")  # the expanded row grows with the saved text
+        await go(app, pilot, "z", "ctrl+e")  # the expanded row grows with the saved text
         box = app.screen.query_one(TextArea)
         assert box.text == NOTES and box.size.height == 3
         await go(app, pilot, "shift+enter", "x", "ctrl+j", "y")
@@ -1089,7 +1089,7 @@ def test_esc_cancels_the_multi_line_editor(tmp_path, notion):
 
     async def script(app, pilot, grid):
         await to_notes(app, pilot, grid)
-        await go(app, pilot, "enter", "shift+enter", "x", "escape")
+        await go(app, pilot, "ctrl+e", "shift+enter", "x", "escape")
         assert not isinstance(app.screen, CellTextScreen)
         assert notion.calls == [] and cell(grid, "a", "Notes").startswith("Goals:")
 
@@ -1098,7 +1098,7 @@ def test_esc_cancels_the_multi_line_editor(tmp_path, notion):
 
 def test_a_title_cell_stays_one_line(tmp_path, notion):
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "enter")
+        await go(app, pilot, "right", "ctrl+e")
         assert isinstance(app.screen, CellTextScreen) and not app.screen.query(TextArea)
         await go(app, pilot, "shift+enter")
         assert app.screen.query_one(Input).value == "Alpha"
@@ -1140,7 +1140,7 @@ def test_shift_e_saves_nothing_when_unchanged_or_on_a_bad_number(tmp_path, notio
     fake_editor(lambda text: (0, "many\n") if text.strip() == "" else (0, text))
 
     async def script(app, pilot, grid):
-        await go(app, pilot, "enter", "E")  # the title, unchanged
+        await go(app, pilot, "right", "E")  # the title, unchanged
         grid.move_cursor(column=grid.names.index("Rating"))
         await go(app, pilot, "E")  # "many" isn't a number
         grid.move_cursor(column=grid.names.index("Status"))
@@ -1183,7 +1183,8 @@ def test_d_shows_the_cursor_rows_body_and_follows_the_cursor(tmp_path, notion):
         await go(app, pilot, "d")
         await settle(app, pilot)
         assert details.display and app.cache.db_details("ds")
-        assert "No details yet" in body.source and notion.body_reads == []  # known empty: no fetch
+        assert body.source.startswith("**Alpha**") and "No details yet" in body.source
+        assert notion.body_reads == []  # known empty: no fetch
         await go(app, pilot, "j")
         await settle(app, pilot)
         assert "call HR" in body.source and "Status" not in body.source
@@ -1193,6 +1194,21 @@ def test_d_shows_the_cursor_rows_body_and_follows_the_cursor(tmp_path, notion):
         assert notion.body_reads == ["b"]
         await go(app, pilot, "d")
         assert not details.display and not app.cache.db_details("ds")
+
+    drive(tmp_path, script)
+
+
+def test_details_pane_shows_the_whole_title(tmp_path, notion):
+    long = "Do health insurance – join the *group* policy before the deadline,\nthen send the form " + "x" * 120
+    notion.rows[0] = row("a", long)
+
+    async def script(app, pilot, grid):
+        grid.focus()
+        await go(app, pilot, "d")
+        await settle(app, pilot)
+        source = app.query_one("#details-body", Markdown).source
+        assert source.startswith("**Do health insurance") and "x" * 120 in source
+        assert "\\*group\\*" in source and "then send the form" in source
 
     drive(tmp_path, script)
 
@@ -1207,5 +1223,43 @@ def test_D_opens_the_row_and_backspace_comes_back(tmp_path, notion):
         await go(app, pilot, "backspace")
         await settle(app, pilot)
         assert app.current.id == "ds" and grid.display
+
+    drive(tmp_path, script)
+
+
+def test_enter_opens_notion_the_row_page_when_it_has_content(tmp_path, notion, opened, monkeypatch):
+    monkeypatch.setitem(globals(), "DB", Page(**{**DB.__dict__, "url": "https://notion.so/ds"}))
+    notion.rows[1]["url"] = "https://notion.so/b"
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "enter")  # in the page list: the highlighted page
+        assert opened == ["https://notion.so/ds"] and app.query_one(PageList).has_focus
+        await go(app, pilot, "right")
+        assert grid.has_focus and app.screen.has_class("full")
+        await go(app, pilot, "enter")  # Alpha has no content: the database
+        assert opened[-1] == "https://notion.so/ds"
+        await go(app, pilot, "j", "enter")  # Beta has (≡): its page
+        assert opened[-1] == "https://notion.so/b" and not isinstance(app.screen, CellTextScreen)
+
+    drive(tmp_path, script)
+
+
+def test_e_asks_cell_or_row_body_and_ctrl_e_alt_e_go_straight(tmp_path, notion, monkeypatch):
+    bodies = []
+    monkeypatch.setattr(NotionTUI, "_edit_in_editor", lambda self, page: bodies.append(page.id))
+
+    async def script(app, pilot, grid):
+        await go(app, pilot, "right", "e")
+        assert isinstance(app.screen, EditChoiceScreen)
+        await go(app, pilot, "c")
+        assert isinstance(app.screen, CellTextScreen) and app.screen.query_one(Input).value == "Alpha"
+        await go(app, pilot, "escape", "e", "j", "enter")  # the second choice: row body
+        assert bodies == ["a"] and not isinstance(app.screen, EditChoiceScreen)
+        await go(app, pilot, "e", "escape")
+        assert bodies == ["a"] and grid.has_focus
+        await go(app, pilot, "j", "alt+e")
+        assert bodies == ["a", "b"]
+        await go(app, pilot, "ctrl+e")
+        assert isinstance(app.screen, CellTextScreen) and app.screen.query_one(Input).value == "Beta"
 
     drive(tmp_path, script)

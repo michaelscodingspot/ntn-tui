@@ -1,4 +1,4 @@
-"""Modal dialogs: trash confirmation, options, new page, the database sort picker, the link picker,
+"""Modal dialogs: trash confirmation, options, the grid's edit choice (cell or row body), new page, the database sort picker, the link picker,
 the repo picker and prompt editor of a Claude session, and the editors that open over a cell of the database grid."""
 
 from __future__ import annotations
@@ -243,6 +243,43 @@ class NewPageScreen(ModalScreen[NewPage | None]):
 
 # Property types a database can be sorted by.
 _UNSORTABLE_TYPES = {"relation", "rollup", "files", "button"}
+
+
+class EditChoiceScreen(ModalScreen[str | None]):
+    """`e` in the grid: edit the cell under the cursor or the row's page body. Returns "cell", "body" or None."""
+
+    AUTO_FOCUS = "PickList"
+    CHOICES = ("cell", "body")
+    BINDINGS = [
+        Binding("c,ctrl+e", "choose('cell')", "cell"),
+        Binding("b,alt+e", "choose('body')", "row body"),
+        Binding("escape,q", "choose('')", "cancel"),
+    ]
+    DEFAULT_CSS = """
+    EditChoiceScreen { align: center middle; }
+    #choice { width: 36; height: auto; padding: 1 2; border: round $accent; background: $surface; }
+    #choice PickList { height: auto; background: transparent; }
+    #choice ListItem { padding: 0 1; }
+    #choice .hint { color: $text-muted; margin-top: 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="choice"):
+            yield PickList(
+                ListItem(Label(Text.assemble("Cell", ("  c · ctrl+e", "dim")))),
+                ListItem(Label(Text.assemble("Row body", ("  b · alt+e", "dim")))),
+            )
+            yield Label("enter choose · esc cancel", classes="hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#choice").border_title = "Edit"
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        event.stop()
+        self.dismiss(self.CHOICES[event.list_view.index or 0])
+
+    def action_choose(self, what: str) -> None:
+        self.dismiss(what or None)
 
 
 class PropertyPickScreen(ModalScreen[str | None]):
