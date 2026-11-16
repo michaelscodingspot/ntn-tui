@@ -78,9 +78,18 @@ CREATE TABLE IF NOT EXISTS db_state (
     sorts_json     TEXT            -- NULL = the view's sorts
     -- edit_mode   INTEGER: 1 = rows open in the Edit grid (added by migration)
     -- expand_row  INTEGER: 1 = the Edit grid shows the cursor's row wrapped, `z` (added by migration)
+    -- details     INTEGER: 1 = the details pane under the Edit grid is open, `d` (added by migration)
 );
 
 -- Pages and databases pinned to the top of the list, in the order they were pinned.
+-- Whether database rows have content in their page: the grid's ≡ mark, the details pane.
+-- Rows aren't kept in `pages` (that is the list), so their body checks live here.
+CREATE TABLE IF NOT EXISTS row_bodies (
+    page_id          TEXT PRIMARY KEY,
+    page_last_edited TEXT NOT NULL,  -- the row's last_edited when checked; a newer edit means unchecked
+    has_body         INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS pinned (
     page_id   TEXT PRIMARY KEY,
     pinned_at REAL NOT NULL
@@ -110,6 +119,8 @@ class Cache:
                 self.db.execute("ALTER TABLE db_state ADD COLUMN edit_mode INTEGER NOT NULL DEFAULT 0")
             if "expand_row" not in state_columns:
                 self.db.execute("ALTER TABLE db_state ADD COLUMN expand_row INTEGER NOT NULL DEFAULT 0")
+            if "details" not in state_columns:
+                self.db.execute("ALTER TABLE db_state ADD COLUMN details INTEGER NOT NULL DEFAULT 0")
 
     def recent_pages(self, limit: int = 200) -> list[Page]:
         rows = self.db.execute(_PAGE_SELECT + "ORDER BY p.last_edited DESC LIMIT ?", (limit,))
@@ -172,6 +183,26 @@ class Cache:
         with self.db:
             self.db.execute("UPDATE pages SET has_body = ? WHERE id = ?", (int(has_body), page_id))
 
+    def row_bodies(self, rows: dict[str, str]) -> dict[str, bool]:
+        """Of the rows given as {id: last_edited}, whether each one checked since that edit has content."""
+        found: dict[str, bool] = {}
+        ids = list(rows)
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            marks = ",".join("?" * len(chunk))
+            query = f"SELECT page_id, page_last_edited, has_body FROM row_bodies WHERE page_id IN ({marks})"
+            for page_id, last_edited, value in self.db.execute(query, chunk):
+                if last_edited == rows[page_id]:
+                    found[page_id] = bool(value)
+        return found
+
+    def put_row_body(self, page_id: str, last_edited: str, has_body: bool) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO row_bodies (page_id, page_last_edited, has_body) VALUES (?, ?, ?)",
+                (page_id, last_edited, int(has_body)),
+            )
+
     def put_nodes(self, nodes: list[Node]) -> None:
         now = time.time()
         with self.db:
@@ -227,6 +258,7 @@ class Cache:
             self.db.execute("DELETE FROM pages WHERE id = ?", (page_id,))
             self.db.execute("DELETE FROM nodes WHERE id = ?", (page_id,))
             self.db.execute("DELETE FROM pinned WHERE page_id = ?", (page_id,))
+            self.db.execute("DELETE FROM row_bodies WHERE page_id = ?", (page_id,))
             for table in ("views", "data_source_schema", "db_state"):
                 self.db.execute(f"DELETE FROM {table} WHERE data_source_id = ?", (page_id,))
 
@@ -302,6 +334,13 @@ class Cache:
 
     def put_db_expand_row(self, data_source_id: str, on: bool) -> None:
         self._put_db_flag(data_source_id, "expand_row", on)
+
+    def db_details(self, data_source_id: str) -> bool:
+        """Whether the details pane (the cursor row's page body) shows under the database's Edit grid."""
+        return self._db_flag(data_source_id, "details")
+
+    def put_db_details(self, data_source_id: str, on: bool) -> None:
+        self._put_db_flag(data_source_id, "details", on)
 
     def _db_flag(self, data_source_id: str, column: str) -> bool:
         """An on/off column of db_state; `column` is one of the names above, never user input."""

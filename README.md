@@ -119,6 +119,8 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | `u`                 | bring back the last deleted row (several in a row work) |
 | `alt+j` / `alt+k`, `alt+↓` / `alt+↑` | move the row down / up (databases with an `_ord` column, below) |
 | `e`                 | edit the row's body in `$EDITOR`                    |
+| `d`                 | details pane under the grid: the cursor row's page body (kept per database) |
+| `D`                 | open the row as a page in the preview; `backspace` comes back |
 | `ctrl+o`            | Claude Code session on the cell in herdr (below)    |
 | `y` / `ctrl+c`      | copy the cell's full value to the clipboard         |
 | `v`                 | back to View mode, focus stays on the right side    |
@@ -131,6 +133,12 @@ the other rows stay one line. `enter` on a
 text (rich text) cell opens an editor in place that grows down with the text: `enter` saves,
 `shift+enter` starts a new line (`ctrl+j` too, for terminals that don't report shift+enter),
 `esc` cancels. Titles stay one line, as in Notion.
+
+Rows whose page has content (more than empty lines) show `≡` in the grid's left gutter. The
+check is one Notion call per row, in the background, kept in the `row_bodies` cache table until
+the row is edited again. `d` opens a pane under the grid showing the cursor row's page body
+(properties left out: the grid shows them), following the cursor; bodies are cached like page
+previews, so `D` then opens the row at once.
 
 `ctrl+o` asks which repo (aut, notion-tui, jira-board, Obics, or a folder you type), then opens
 the prompt `task: <cell text>` (the cell's full text) in an editor box to change it (`ctrl+s`

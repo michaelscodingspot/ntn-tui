@@ -53,11 +53,21 @@ class FakeNotion:
         self.fail_queries = False  # set: row queries are refused
         self.schema = SCHEMA
         self.create_gate = None  # set: row creation waits for this event
-        for name in ("search", "get_schema", "list_view_ids", "query_rows", "update_row", "create_row", "highest_number", "trash", "restore"):
+        self.bodies = {"b": "## Steps\n- call HR"}  # row → its page body; rows not here have none
+        self.body_reads = []  # rows whose page was fetched
+        for name in ("search", "get_schema", "list_view_ids", "query_rows", "update_row", "create_row", "highest_number",
+                     "trash", "restore", "has_body", "get_markdown"):
             monkeypatch.setattr(ntn, name, getattr(self, name))
 
     async def search(self, query="", cursor=None, page_size=50):
         return [DB], None
+
+    async def has_body(self, page_id, look_at=25):
+        return bool(self.bodies.get(page_id))
+
+    async def get_markdown(self, page_id):
+        self.body_reads.append(page_id)
+        return f"---\nStatus: Done\n---\n{self.bodies.get(page_id, '')}"
 
     async def get_schema(self, data_source_id):
         return copy.deepcopy(self.schema)
@@ -1136,5 +1146,66 @@ def test_shift_e_saves_nothing_when_unchanged_or_on_a_bad_number(tmp_path, notio
         grid.move_cursor(column=grid.names.index("Status"))
         await go(app, pilot, "E")  # not a text cell
         assert notion.calls == []
+
+    drive(tmp_path, script)
+
+
+# ---------- rows with a page body: ≡ mark, details pane (d), opening the row (D) ----------
+
+def gutter(grid, row_id):
+    return str(grid.rows[row_id].label)
+
+
+def test_rows_with_a_body_show_a_mark_and_it_is_cached(tmp_path, notion):
+    async def script(app, pilot, grid):
+        assert gutter(grid, "a") == " " and gutter(grid, "b") == "≡"
+        assert app.cache.row_bodies({"a": "", "b": ""}) == {"a": False, "b": True}
+
+    drive(tmp_path, script)
+
+
+def test_a_save_mark_gives_way_to_the_body_mark(tmp_path, notion):
+    async def script(app, pilot, grid):
+        grid.mark_saved("b")
+        assert gutter(grid, "b") == "✓"
+        await pilot.pause(1.7)
+        assert gutter(grid, "b") == "≡"
+
+    drive(tmp_path, script)
+
+
+def test_d_shows_the_cursor_rows_body_and_follows_the_cursor(tmp_path, notion):
+    async def script(app, pilot, grid):
+        details = app.query_one("#details")
+        body = app.query_one("#details-body", Markdown)
+        grid.focus()  # cursor on Alpha
+        assert not details.display
+        await go(app, pilot, "d")
+        await settle(app, pilot)
+        assert details.display and app.cache.db_details("ds")
+        assert "No details yet" in body.source and notion.body_reads == []  # known empty: no fetch
+        await go(app, pilot, "j")
+        await settle(app, pilot)
+        assert "call HR" in body.source and "Status" not in body.source
+        assert notion.body_reads == ["b"]
+        await go(app, pilot, "k", "j")  # back on Beta: from the cache
+        await settle(app, pilot)
+        assert notion.body_reads == ["b"]
+        await go(app, pilot, "d")
+        assert not details.display and not app.cache.db_details("ds")
+
+    drive(tmp_path, script)
+
+
+def test_D_opens_the_row_and_backspace_comes_back(tmp_path, notion):
+    async def script(app, pilot, grid):
+        grid.focus()
+        await go(app, pilot, "j", "D")
+        await settle(app, pilot)
+        assert app.current.id == "b" and not grid.display
+        assert "call HR" in app.query_one("#preview", Markdown).source
+        await go(app, pilot, "backspace")
+        await settle(app, pilot)
+        assert app.current.id == "ds" and grid.display
 
     drive(tmp_path, script)

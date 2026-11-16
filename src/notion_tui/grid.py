@@ -15,6 +15,7 @@ from .rows import cell_text
 
 NEW_ROW = "new-row"  # key of the row shown while its title is typed and sent
 SAVED_MARK_SECONDS = 1.5  # how long a row shows ✓ after a save
+BODY_MARK = "≡"  # in the gutter of a row whose page has content (details)
 
 
 def _cell(text: str, width: int | None, wrap: bool) -> Text:
@@ -58,6 +59,8 @@ class RowGrid(DataTable):
         Binding("e", "app.row_body", "row body"),
         Binding("E", "app.cell_in_editor", "cell in $EDITOR"),
         Binding("z", "app.db_expand", "expand row"),
+        Binding("d", "app.row_details", "details"),
+        Binding("D", "app.row_open", "open row page"),
         Binding("ctrl+o", "app.row_claude", "Claude task"),
         Binding("y,ctrl+c", "app.row_copy", "copy cell"),
     ]
@@ -71,6 +74,7 @@ class RowGrid(DataTable):
         self.widths: list[int | None] = []  # longest text each column shows; None: not laid out yet
         self.expand = False  # the cursor's row grows to show its cells wrapped (`z`); others stay one line
         self.expanded: str | None = None  # the row drawn wrapped now
+        self.bodies: set[str] = set()  # rows whose page has content: ≡ in the gutter when no other mark shows
 
     @property
     def count(self) -> int:
@@ -93,13 +97,13 @@ class RowGrid(DataTable):
         """Build the table from the kept texts, keeping the cursor and the row marks.
         Rebuilt rather than updated cell by cell: Textual re-measures a whole column for each narrower cell."""
         row_id, at = self.current_row_id, self.cursor_coordinate
-        marks = {key: row.label for key, row in self.rows.items()}
+        marks = {key: row.label for key, row in self.rows.items() if str(row.label) not in (" ", BODY_MARK)}
         self.clear(columns=True)
         self.expanded = None  # rows are added one line each; the cursor's row grows once it is placed
         for name, head in zip(self.names, self.heads):
             self.add_column(head, key=name)
         for key in self.texts:
-            self.add_row(*self._cells(key), key=key, label=marks.get(key, " "))
+            self.add_row(*self._cells(key), key=key, label=marks.get(key, self._rest_mark(key)))
         keys = list(self.texts)
         index = keys.index(row_id) if row_id in self.texts else min(at.row, len(keys) - 1)
         self.move_cursor(row=max(index, 0), column=min(at.column, max(len(self.names) - 1, 0)), animate=False)
@@ -209,17 +213,29 @@ class RowGrid(DataTable):
             self.texts[row["id"]] = self._texts(row)
             self._changed(row["id"])
 
-    def mark(self, row_id: str, mark: str) -> None:
-        """Show one character in the row's gutter: … saving, ✓ saved, space nothing."""
+    def _rest_mark(self, row_id: str) -> Text:
+        return Text(BODY_MARK, style="bold") if row_id in self.bodies else Text(" ")
+
+    def mark(self, row_id: str, mark: str | None) -> None:
+        """Show one character in the row's gutter: … saving, ✓ saved; None: back to ≡ (has content) or nothing."""
         if self.has_row(row_id):
-            self.rows[row_id].label = Text(mark)
+            self.rows[row_id].label = self._rest_mark(row_id) if mark is None else Text(mark)
             self._clear_caches()
             self.refresh()
 
     def mark_saved(self, row_id: str) -> None:
         """✓ in the row's gutter for a moment."""
         self.mark(row_id, "✓")
-        self.set_timer(SAVED_MARK_SECONDS, lambda: self.mark(row_id, " "))
+        self.set_timer(SAVED_MARK_SECONDS, lambda: self.mark(row_id, None))
+
+    def set_bodies(self, found: dict[str, bool]) -> None:
+        """Record which rows have content, redrawing the gutter of rows showing no other mark."""
+        for row_id, has_body in found.items():
+            if has_body == (row_id in self.bodies):
+                continue
+            (self.bodies.add if has_body else self.bodies.discard)(row_id)
+            if self.has_row(row_id) and str(self.rows[row_id].label) in (" ", BODY_MARK):
+                self.mark(row_id, None)
 
     def swap_rows(self, first: dict, second: dict) -> None:
         """Swap two rows the app swapped in its rows list, with their changed values; the cursor stays on its row."""
