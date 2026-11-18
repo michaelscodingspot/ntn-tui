@@ -22,6 +22,11 @@ class Link:
     image: bool = False
 
 
+def md_escape(text: str) -> str:
+    """Plain text shown as Markdown as is: its Markdown characters backslash-escaped."""
+    return re.sub(r"([\\`*_\[\]<>#!|~])", r"\\\1", text)
+
+
 def notion_links_to_markdown(md: str) -> str:
     """Turn Notion's page and database link tags into Markdown links."""
 

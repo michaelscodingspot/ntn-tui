@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -42,11 +42,12 @@ from .database import (
     view_label,
 )
 from .grid import NEW_ROW, RowGrid
-from .links import Link, notion_id, notion_links_to_markdown, page_links, same_file
+from .links import Link, md_escape, notion_id, notion_links_to_markdown, page_links, same_file
 from .modals import (
     CellPickScreen,
     CellTextScreen,
     ConfirmScreen,
+    EditChoiceScreen,
     LinkPickScreen,
     NewPageScreen,
     OptionsScreen,
@@ -62,6 +63,8 @@ PREVIEW_DEBOUNCE = 0.12  # seconds to wait after the cursor stops before loading
 SEARCH_DEBOUNCE = 0.4  # seconds to wait after typing stops before asking Notion
 LOAD_MORE_MARGIN = 5  # fetch the next batch when the cursor is this close to the end
 BODY_CHECKS = 2  # parallel ntn calls when checking which database entries have content
+NO_DETAILS = "_No details yet. Press alt+e to write some._"  # the details pane on a row whose page is empty
+DETAILS_DEBOUNCE = 0.2  # seconds to wait after the grid's cursor stops before showing its row's page in the details pane
 VIEW_FETCHES = 2  # parallel ntn calls when fetching a database's views
 WATCH_SECONDS = 60  # how often the focused page is checked for changes made elsewhere
 RECENT_EDIT = timedelta(minutes=2)  # Notion's edit time has minute steps: content edited this recently is compared too
@@ -94,6 +97,15 @@ def split_page(md: str, title: str) -> tuple[list[tuple[str, str]], str]:
     md = _BR.sub("  \n", md)
     md = notion_links_to_markdown(md)
     return properties, md.strip()
+
+
+def page_view(markdown: str, title: str, empty: str) -> str:
+    """A page as the preview shows it: its non-empty properties, a rule, then the body (or `empty`)."""
+    properties, body = split_page(markdown, title)
+    content = body or empty
+    if properties:
+        content = "  \n".join(f"**{k}:** {v}" for k, v in properties) + "\n\n---\n\n" + content
+    return content
 
 
 def _local(iso: str) -> datetime | None:
@@ -157,8 +169,10 @@ class PageList(ListView):
         Binding("k", "cursor_up", "up", show=False),
         Binding("g", "first", "top", show=False),
         Binding("G", "last", "bottom", show=False),
+        Binding("enter", "app.browser", "open in Notion"),
+        Binding("right", "app.open_preview", "open", key_display="→"),
         # Only while a grid is showing; otherwise `l` falls through to the app's links key.
-        Binding("right,l", "app.focus_grid", "go to grid", key_display="→"),
+        Binding("l", "app.focus_grid", "go to grid", show=False),
     ]
 
     def action_first(self) -> None:
@@ -270,6 +284,10 @@ class NotionTUI(App):
     #dbtabs, #dbinfo, #dberror { height: 1; padding: 0 1; display: none; }
     #dbinfo { color: $text-muted; margin-bottom: 1; }
     #dberror { color: $error; margin-bottom: 1; }
+    #details { height: 45%; margin: 0 1; display: none; }
+    #details-head { height: 1; color: $text-muted; }
+    #details-scroll { height: 1fr; }
+    #details-body { background: transparent; }
     #dbquery { height: 1; border: none; padding: 0 1; margin: 0 1; background: $boost; display: none; }
     """
 
@@ -332,6 +350,8 @@ class NotionTUI(App):
         self._people: dict[str, dict[str, str]] = {}  # data source → person name → user ID, seen in its rows
         self._created: Page | None = None  # page made here that Notion's search may not list yet
         self._created_during = ""  # the search that was active when it was made
+        self._details_timer: Timer | None = None
+        self._details_key: tuple[str, str] | None = None  # (row, last_edited) shown in the details pane
 
     # ---------- layout ----------
 
@@ -353,6 +373,10 @@ class NotionTUI(App):
                 with PreviewScroll():
                     yield BidiMarkdown("", id="preview", open_links=False)
                 yield RowGrid(id="grid")
+                with Vertical(id="details"):
+                    yield Static(Text("── d hide · D open · alt+e edit ──", style="dim"), id="details-head")
+                    with VerticalScroll(id="details-scroll"):
+                        yield BidiMarkdown("", id="details-body", open_links=False)
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -451,22 +475,33 @@ class NotionTUI(App):
         if self._unchecked_entries():
             self.check_bodies()
 
+    @staticmethod
+    async def _ask_bodies(page_ids: list[str], found: Callable[[str, bool], None]) -> None:
+        """Ask Notion whether each page has content, BODY_CHECKS at a time; `found` gets each answer.
+        A page whose check fails gets none: it stays unchecked and is tried again on the next load."""
+        limit = asyncio.Semaphore(BODY_CHECKS)
+
+        async def check(page_id: str) -> None:
+            async with limit:
+                try:
+                    has_body = await ntn.has_body(page_id)
+                except NtnError:
+                    return
+            found(page_id, has_body)
+
+        await asyncio.gather(*(check(page_id) for page_id in page_ids))
+
     @work(exclusive=True, group="bodies")
     async def check_bodies(self) -> None:
         """Find out which database entries have content, then show the ones that do."""
-        limit = asyncio.Semaphore(BODY_CHECKS)
+        shown: list[bool] = []
 
-        async def check(page: Page) -> bool:
-            async with limit:
-                try:
-                    has_body = await ntn.has_body(page.id)
-                except NtnError:
-                    return False  # stays unchecked and hidden; tried again on the next list load
-                self.cache.put_has_body(page.id, has_body)
-                return has_body
+        def found(page_id: str, has_body: bool) -> None:
+            self.cache.put_has_body(page_id, has_body)
+            shown.append(has_body)
 
-        found = await asyncio.gather(*(check(p) for p in self._unchecked_entries()))
-        if any(found):
+        await self._ask_bodies([p.id for p in self._unchecked_entries()], found)
+        if any(shown):
             await self._render_list(keep_id=self.current.id if self.current else None)
 
     @work(exclusive=True, group="list")
@@ -519,6 +554,10 @@ class NotionTUI(App):
         self._preview_timer = self.set_timer(PREVIEW_DEBOUNCE, self._show_current)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.action_open_preview()  # a click; enter opens the page in Notion
+
+    def action_open_preview(self) -> None:
+        """Preview side at full width, focused (the grid when it is showing)."""
         self.screen.add_class("full")
         self._focus_preview()
 
@@ -567,10 +606,7 @@ class NotionTUI(App):
         if markdown is None:
             content = "_loading…_"
         else:
-            properties, body = split_page(markdown, page.title)
-            content = body or "_(empty page)_"
-            if properties:
-                content = "  \n".join(f"**{k}:** {v}" for k, v in properties) + "\n\n---\n\n" + content
+            content = page_view(markdown, page.title, "_(empty page)_")
         await self.query_one("#preview", Markdown).update(content)
         self.links = page_links(content) if markdown is not None else []
         self.refresh_bindings()
@@ -919,10 +955,16 @@ class NotionTUI(App):
             expand = self.cache.db_expand_row(self.current.id)
             if grid.stale(rows, names):
                 grid.show(rows, names, expand)
+                if loaded:
+                    self._check_row_bodies(loaded.page_id, rows)
             else:
                 grid.set_expand(expand)
         switched, focused = editing != grid.display, grid.has_focus or preview.has_focus
         grid.display, preview.display = editing, not editing
+        details = self.query_one("#details")
+        details.display = editing and self.cache.db_details(self.current.id)
+        if details.display:
+            self._schedule_details()
         if switched and focused:
             (grid if editing else preview).focus()  # the focus stays on this side
         if switched:
@@ -1089,7 +1131,7 @@ class NotionTUI(App):
             old = find_row(rows.rows, row_id) if rows else None
             if old and self._rows_of(page) is rows:
                 grid.redraw_row(old)
-                grid.mark(row_id, " ")
+                grid.mark(row_id, None)
             return
         rows = self._rows_of(page)
         if rows is None:
@@ -1102,6 +1144,7 @@ class NotionTUI(App):
         replace_row(rows.rows, fresh)
         grid.redraw_row(fresh)
         grid.mark_saved(row_id)
+        self._row_page_changed(row_id)
         await self._store_rows(page, rows)
 
     def _rows_of(self, page: Page) -> DbRows | None:
@@ -1296,7 +1339,7 @@ class NotionTUI(App):
             except NtnError as err:
                 self._moves_dropped = self._moves
                 for row_id in self._last_move:
-                    grid.mark(row_id, " ")
+                    grid.mark(row_id, None)
                 self._last_move.clear()
                 self.notify(str(err), title="Could not move the row", severity="error")
                 if self._rows_of(page):
@@ -1312,6 +1355,137 @@ class NotionTUI(App):
             return
         for row_id in done:
             grid.mark_saved(row_id)
+            self._row_page_changed(row_id)
+
+    # ---------- database rows: page bodies (≡ mark, details pane, opening a row) ----------
+
+    def _check_row_bodies(self, data_source_id: str, rows: list[dict]) -> None:
+        """Mark the rows known to have content at once; ask Notion about the rest in the background."""
+        edited = {row["id"]: ntn.row_page(row).last_edited for row in rows}
+        known = self.cache.row_bodies(edited)
+        self.query_one(RowGrid).set_bodies(known)
+        unchecked = {row_id: when for row_id, when in edited.items() if row_id not in known}
+        if unchecked:
+            self.check_row_bodies(data_source_id, unchecked)
+
+    @work(exclusive=True, group="row-bodies")
+    async def check_row_bodies(self, data_source_id: str, rows: dict[str, str]) -> None:
+        """Find out which rows (given as {id: last_edited}) have content in their page, one ntn call each."""
+
+        def found(row_id: str, has_body: bool) -> None:
+            self.cache.put_row_body(row_id, rows[row_id], has_body)
+            if self.current and self.current.id == data_source_id:
+                self.query_one(RowGrid).set_bodies({row_id: has_body})
+
+        await self._ask_bodies(list(rows), found)
+
+    @work(group="row-body")
+    async def recheck_row_body(self, data_source_id: str, row_id: str) -> None:
+        """A row's body was just edited here: update its ≡ mark (the rows' next load caches the answer)."""
+
+        def found(row_id: str, has_body: bool) -> None:
+            if self.current and self.current.id == data_source_id:
+                self.query_one(RowGrid).set_bodies({row_id: has_body})
+
+        await self._ask_bodies([row_id], found)
+
+    def action_row_details(self) -> None:
+        """`d`: show or hide the cursor row's page under the grid."""
+        on = not self.cache.db_details(self.current.id)
+        self.cache.put_db_details(self.current.id, on)
+        self._details_key = None
+        self._sync_grid()
+
+    def on_data_table_cell_highlighted(self, event: RowGrid.CellHighlighted) -> None:
+        if self.query_one("#details").display:
+            self._schedule_details()
+
+    def _schedule_details(self) -> None:
+        if self._details_timer is not None:
+            self._details_timer.stop()
+        self._details_timer = self.set_timer(DETAILS_DEBOUNCE, self._show_details)
+
+    async def _show_details(self) -> None:
+        """Show the cursor row's page body in the details pane: from the cache, or fetched."""
+        if not self.query_one("#details").display:
+            return
+        found = self._cursor_row()
+        if found is None:
+            self._details_key = None
+            await self._render_details("", "_No row here._")
+            return
+        page = ntn.row_page(found[1])
+        if self._details_key == (page.id, page.last_edited):
+            return  # already showing, or on its way
+        self._details_key = (page.id, page.last_edited)
+        cached = self.cache.content(page.id)
+        if cached and cached[1] == page.last_edited:
+            await self._render_details(page.title, page_view(cached[0], page.title, NO_DETAILS))
+        else:
+            await self._render_details(page.title, "_loading…_")
+            self.fetch_details(page)
+
+    async def _render_details(self, title: str, content: str) -> None:
+        """The whole title (wrapped, every line of it) above the fields and body."""
+        if title:
+            content = f"**{md_escape(title)}**\n\n{content}"
+        await self.query_one("#details-body", Markdown).update(content)
+        self.query_one("#details-scroll").scroll_home(animate=False)
+
+    @work(exclusive=True, group="details")
+    async def fetch_details(self, page: Page) -> None:
+        try:
+            markdown = await ntn.get_markdown(page.id)
+        except NtnError as err:
+            if self._details_key == (page.id, page.last_edited):
+                self._details_key = None  # tried again when the cursor comes back
+                await self._render_details(page.title, f"_Could not load the page: {err}_")
+            return
+        self.cache.put_content(page, markdown)  # the page opens at once with D
+        if self._details_key == (page.id, page.last_edited):
+            await self._render_details(page.title, page_view(markdown, page.title, NO_DETAILS))
+
+    def _row_page_changed(self, row_id: str) -> None:
+        """A row's fields were saved here: its cached page is out of date (Notion's edit time may not move
+        within the minute), so drop it and show the row again in the details pane."""
+        self.cache.invalidate(row_id)
+        self._refresh_details(row_id)
+
+    def _refresh_details(self, page_id: str) -> None:
+        """A row's page changed here: show it again in the details pane."""
+        if self._details_key and self._details_key[0] == page_id:
+            self._details_key = None
+            self._schedule_details()
+
+    def action_row_open(self) -> None:
+        """`D`: open the cursor row as a page in the preview; backspace comes back to the database."""
+        found = self._cursor_row()
+        if found and self.current:
+            self._link_history.append(self.current)
+            self.call_later(self._go_to, ntn.row_page(found[1]))
+
+    def action_row_browser(self) -> None:
+        """Enter in the grid: the cursor row's page in Notion when it has content (≡), otherwise the database."""
+        found = self._cursor_row()
+        if found and found[1]["id"] in self.query_one(RowGrid).bodies:
+            page = ntn.row_page(found[1])
+            if page.url:
+                self._open_in_notion(page)
+                return
+        self.action_browser()
+
+    def action_row_edit(self) -> None:
+        """`e` in the grid: a small popup asks whether to edit the cell or the row's page body."""
+        if not self._cursor_row():
+            return
+
+        def chosen(what: str | None) -> None:
+            if what == "cell":
+                self.query_one(RowGrid).action_select_cursor()
+            elif what == "body":
+                self.action_row_body()
+
+        self.push_screen(EditChoiceScreen(), chosen)
 
     def action_row_body(self) -> None:
         found = self._cursor_row()
@@ -1644,6 +1818,10 @@ class NotionTUI(App):
     def _reload_after_edit(self, page: Page) -> None:
         # The list reload brings the new last_edited; the stale cached preview is then refetched.
         self.cache.invalidate(page.id)
+        self._refresh_details(page.id)
+        grid = self.query_one(RowGrid)
+        if self.current and grid.display and grid.has_row(page.id):
+            self.recheck_row_body(self.current.id, page.id)
         self.load_list(self.query_text)
 
     @contextmanager
@@ -1883,9 +2061,10 @@ class NotionTUI(App):
             self.call_later(self._go_to, self._link_history.pop())
 
     def action_browser(self) -> None:
-        page = self.current
-        if not (page and page.url):
-            return
+        if self.current and self.current.url:
+            self._open_in_notion(self.current)
+
+    def _open_in_notion(self, page: Page) -> None:
         desktop.open_url(page.url)
         self.raise_browser(page)
 

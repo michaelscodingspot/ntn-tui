@@ -38,7 +38,8 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 |----------------|------------------------------------------|
 | `j` / `k`      | move in list (scroll in preview)         |
 | `g` / `G`      | top / bottom (bottom loads more)         |
-| `enter`        | open page full screen                    |
+| `enter`        | list: open page in Notion; grid: below   |
+| `→`            | list: open page full screen (click too)  |
 | `esc`          | back to list / clear search              |
 | `tab`          | search → list → preview; grid: next cell |
 | `w`            | switch list ↔ preview (skips search)     |
@@ -103,14 +104,17 @@ The database keys act on the database highlighted in the list; focus stays there
 cursor); the top right of the preview shows which. Edit mode works on list and table views.
 Other views stay in View mode, and a database last used in Edit mode comes back to it.
 Highlighting such a database in the list shows the grid while `j` / `k` stay on the list:
-`→`, `l`, `v`, `e` or `enter` goes into the grid (`enter` full screen).
+`→`, `l`, `v` or `e` goes into the grid (`→` full screen).
 
 | Key                 | In the grid                                         |
 |---------------------|-----------------------------------------------------|
 | `j` `k` `h` `l`, arrows | move between cells                              |
 | `tab` / `shift+tab` | next / previous cell, on to the next / previous row |
 | `g` / `G`           | first / last row                                    |
-| `enter`             | edit the cell (`space` too); text cells take several lines (below) |
+| `enter`             | open in Notion: the row's page when it has content (`≡`), else the database |
+| `e`                 | small popup: edit the cell (`c`) or the row's body (`b`) |
+| `ctrl+e`            | edit the cell (`space` too); text cells take several lines (below) |
+| `alt+e`             | edit the row's body in `$EDITOR`                    |
 | `E`                 | edit the text cell in `$EDITOR`                     |
 | `z`                 | expand the cursor's row: its cells wrapped, following the cursor (kept per database) |
 | `n`                 | new row at the bottom: type its title               |
@@ -118,7 +122,8 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 | `x`                 | delete the row, to Notion's trash, without asking   |
 | `u`                 | bring back the last deleted row (several in a row work) |
 | `alt+j` / `alt+k`, `alt+↓` / `alt+↑` | move the row down / up (databases with an `_ord` column, below) |
-| `e`                 | edit the row's body in `$EDITOR`                    |
+| `d`                 | details pane under the grid: the cursor row's page body (kept per database) |
+| `D`                 | open the row as a page in the preview; `backspace` comes back |
 | `ctrl+o`            | Claude Code session on the cell in herdr (below)    |
 | `y` / `ctrl+c`      | copy the cell's full value to the clipboard         |
 | `v`                 | back to View mode, focus stays on the right side    |
@@ -127,10 +132,17 @@ Highlighting such a database in the list shows the grid while `j` / `k` stay on 
 Text cells keep Notion's line breaks. On one line a cell with several lines shows its first line
 and ends with `⏬`; a long line is cut with `…`. With `z` the cursor's row grows to show its
 cells wrapped to their columns' width, up to 10 lines (`⏬` on the last when there are more);
-the other rows stay one line. `enter` on a
+the other rows stay one line. `ctrl+e` on a
 text (rich text) cell opens an editor in place that grows down with the text: `enter` saves,
 `shift+enter` starts a new line (`ctrl+j` too, for terminals that don't report shift+enter),
 `esc` cancels. Titles stay one line, as in Notion.
+
+Rows whose page has content (more than empty lines) show `≡` in the grid's left gutter. The
+check is one Notion call per row, in the background, kept in the `row_bodies` cache table until
+the row is edited again. `d` opens a pane under the grid showing the cursor row's whole title
+(wrapped, so long titles cut with `…` or `⏬` in the grid read in full), then its fields and
+page body as `D` shows them, following the cursor. Each row's page is fetched once and cached
+like page previews (until the row is edited), so `D` then opens the row at once.
 
 `ctrl+o` asks which repo (aut, notion-tui, jira-board, Obics, or a folder you type), then opens
 the prompt `task: <cell text>` (the cell's full text) in an editor box to change it (`ctrl+s`
@@ -179,7 +191,7 @@ own `nui` window, where the `nui` launcher unmaps kitty's pane moves.
 | Select, status                         | pick list; `a` adds a new option (select only) |
 | Multi-select                           | pick list, `space` ticks, `enter` done, `a` adds an option |
 | People                                 | pick list of the people seen in the rows   |
-| Checkbox                               | `enter` or `space` flips it                |
+| Checkbox                               | `ctrl+e` or `space` flips it               |
 | Formula, created, last edited, ID      | read-only                                  |
 
 Saving a text cell replaces its formatting (bold, links) and line breaks with the plain text
