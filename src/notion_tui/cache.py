@@ -81,7 +81,6 @@ CREATE TABLE IF NOT EXISTS db_state (
     -- details     INTEGER: 1 = the details pane under the Edit grid is open, `d` (added by migration)
 );
 
--- Pages and databases pinned to the top of the list, in the order they were pinned.
 -- Whether database rows have content in their page: the grid's ≡ mark, the details pane.
 -- Rows aren't kept in `pages` (that is the list), so their body checks live here.
 CREATE TABLE IF NOT EXISTS row_bodies (
@@ -90,6 +89,7 @@ CREATE TABLE IF NOT EXISTS row_bodies (
     has_body         INTEGER NOT NULL
 );
 
+-- Pages and databases pinned to the top of the list, in the order they were pinned.
 CREATE TABLE IF NOT EXISTS pinned (
     page_id   TEXT PRIMARY KEY,
     pinned_at REAL NOT NULL

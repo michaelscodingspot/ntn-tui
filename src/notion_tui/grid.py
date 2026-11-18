@@ -99,7 +99,7 @@ class RowGrid(DataTable):
         """Build the table from the kept texts, keeping the cursor and the row marks.
         Rebuilt rather than updated cell by cell: Textual re-measures a whole column for each narrower cell."""
         row_id, at = self.current_row_id, self.cursor_coordinate
-        marks = {key: row.label for key, row in self.rows.items() if str(row.label) not in (" ", BODY_MARK)}
+        marks = {key: row.label for key, row in self.rows.items() if not self._resting(key)}
         self.clear(columns=True)
         self.expanded = None  # rows are added one line each; the cursor's row grows once it is placed
         for name, head in zip(self.names, self.heads):
@@ -215,6 +215,10 @@ class RowGrid(DataTable):
             self.texts[row["id"]] = self._texts(row)
             self._changed(row["id"])
 
+    def _resting(self, row_id: str) -> bool:
+        """The row's gutter shows no save mark, only ≡ or nothing."""
+        return str(self.rows[row_id].label) in (" ", BODY_MARK)
+
     def _rest_mark(self, row_id: str) -> Text:
         return Text(BODY_MARK, style="bold") if row_id in self.bodies else Text(" ")
 
@@ -236,7 +240,7 @@ class RowGrid(DataTable):
             if has_body == (row_id in self.bodies):
                 continue
             (self.bodies.add if has_body else self.bodies.discard)(row_id)
-            if self.has_row(row_id) and str(self.rows[row_id].label) in (" ", BODY_MARK):
+            if self.has_row(row_id) and self._resting(row_id):
                 self.mark(row_id, None)
 
     def swap_rows(self, first: dict, second: dict) -> None:

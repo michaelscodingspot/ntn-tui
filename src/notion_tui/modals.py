@@ -249,11 +249,11 @@ class EditChoiceScreen(ModalScreen[str | None]):
     """`e` in the grid: edit the cell under the cursor or the row's page body. Returns "cell", "body" or None."""
 
     AUTO_FOCUS = "PickList"
-    CHOICES = ("cell", "body")
+    _CHOICES = ("cell", "body")
     BINDINGS = [
         Binding("c,ctrl+e", "choose('cell')", "cell"),
         Binding("b,alt+e", "choose('body')", "row body"),
-        Binding("escape,q", "choose('')", "cancel"),
+        Binding("escape,q", "cancel", "cancel"),
     ]
     DEFAULT_CSS = """
     EditChoiceScreen { align: center middle; }
@@ -276,10 +276,13 @@ class EditChoiceScreen(ModalScreen[str | None]):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         event.stop()
-        self.dismiss(self.CHOICES[event.list_view.index or 0])
+        self.dismiss(self._CHOICES[event.list_view.index or 0])
 
     def action_choose(self, what: str) -> None:
-        self.dismiss(what or None)
+        self.dismiss(what)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class PropertyPickScreen(ModalScreen[str | None]):

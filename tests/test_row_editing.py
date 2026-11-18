@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import copy
+import dataclasses
 
 import pytest
 from textual.widgets import Input, Markdown, TextArea
@@ -1229,7 +1230,7 @@ def test_D_opens_the_row_and_backspace_comes_back(tmp_path, notion):
 
 
 def test_enter_opens_notion_the_row_page_when_it_has_content(tmp_path, notion, opened, monkeypatch):
-    monkeypatch.setitem(globals(), "DB", Page(**{**DB.__dict__, "url": "https://notion.so/ds"}))
+    monkeypatch.setitem(globals(), "DB", dataclasses.replace(DB, url="https://notion.so/ds"))
     notion.rows[1]["url"] = "https://notion.so/b"
 
     async def script(app, pilot, grid):
@@ -1262,5 +1263,31 @@ def test_e_asks_cell_or_row_body_and_ctrl_e_alt_e_go_straight(tmp_path, notion, 
         assert bodies == ["a", "b"]
         await go(app, pilot, "ctrl+e")
         assert isinstance(app.screen, CellTextScreen) and app.screen.query_one(Input).value == "Beta"
+
+    drive(tmp_path, script)
+
+
+def test_details_pane_shows_a_cell_saved_in_the_grid(tmp_path, notion):
+    async def script(app, pilot, grid):
+        grid.focus()
+        await go(app, pilot, "j", "d")
+        await settle(app, pilot)
+        body = app.query_one("#details-body", Markdown)
+        assert body.source.startswith("**Beta**") and notion.body_reads == ["b"]
+        await go(app, pilot, "ctrl+e", "2", "enter")
+        await settle(app, pilot)
+        assert body.source.startswith("**Beta2**") and notion.body_reads == ["b", "b"]  # fetched again
+
+    drive(tmp_path, script)
+
+
+def test_a_body_written_here_marks_the_row_at_once(tmp_path, notion):
+    async def script(app, pilot, grid):
+        await go(app, pilot, "right")
+        assert gutter(grid, "a") == " "
+        notion.bodies["a"] = "notes"  # as if alt+e had saved a body
+        app._reload_after_edit(ntn.row_page(notion.rows[0]))
+        await settle(app, pilot)
+        assert gutter(grid, "a") == "≡"
 
     drive(tmp_path, script)

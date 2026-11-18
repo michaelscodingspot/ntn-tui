@@ -1,4 +1,4 @@
-from notion_tui.links import Link, notion_id, notion_links_to_markdown, page_links, same_file
+from notion_tui.links import Link, md_escape, notion_id, notion_links_to_markdown, page_links, same_file
 
 
 def test_notion_tags_become_markdown_links():
@@ -41,3 +41,7 @@ def test_page_images_after_links():
 def test_same_file_ignores_signature():
     assert same_file("https://s3.example/a/image.png?sig=1", "https://s3.example/a/image.png?sig=2")
     assert not same_file("https://s3.example/a/image.png?sig=1", "https://s3.example/b/image.png?sig=1")
+
+
+def test_md_escape_shows_markdown_characters_as_typed():
+    assert md_escape("a *b* [c] #d `e` \\ f_g") == "a \\*b\\* \\[c\\] \\#d \\`e\\` \\\\ f\\_g"
