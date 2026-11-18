@@ -79,6 +79,15 @@ _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
 _EMPTY_VALUES = {"", "null", "[]", "''", '""', "false"}
 
 
+def page_view(markdown: str, title: str, empty: str) -> str:
+    """A page as the preview shows it: its non-empty properties, a rule, then the body (or `empty`)."""
+    properties, body = split_page(markdown, title)
+    content = body or empty
+    if properties:
+        content = "  \n".join(f"**{k}:** {v}" for k, v in properties) + "\n\n---\n\n" + content
+    return content
+
+
 def _md_escape(text: str) -> str:
     """Plain text shown as Markdown as is: its Markdown characters backslash-escaped."""
     return re.sub(r"([\\`*_\[\]<>#!|~])", r"\\\1", text)
@@ -591,10 +600,7 @@ class NotionTUI(App):
         if markdown is None:
             content = "_loading…_"
         else:
-            properties, body = split_page(markdown, page.title)
-            content = body or "_(empty page)_"
-            if properties:
-                content = "  \n".join(f"**{k}:** {v}" for k, v in properties) + "\n\n---\n\n" + content
+            content = page_view(markdown, page.title, "_(empty page)_")
         await self.query_one("#preview", Markdown).update(content)
         self.links = page_links(content) if markdown is not None else []
         self.refresh_bindings()
@@ -1403,19 +1409,16 @@ class NotionTUI(App):
         cached = self.cache.content(page.id)
         if cached and cached[1] == page.last_edited:
             await self._render_details(page.title, self._details_text(page, cached[0]))
-        elif self.cache.row_bodies({page.id: page.last_edited}).get(page.id) is False:
-            await self._render_details(page.title, self._details_text(page, ""))
         else:
             await self._render_details(page.title, "_loading…_")
             self.fetch_details(page)
 
     def _details_text(self, page: Page, markdown: str) -> str:
-        """The page's body without its properties (the grid shows those)."""
-        body = split_page(markdown, page.title)[1] if markdown else ""
-        return body or "_No details yet. Press alt+e to write some._"
+        """The row's page as `D` shows it: its fields, then the body."""
+        return page_view(markdown, page.title, "_No details yet. Press alt+e to write some._")
 
     async def _render_details(self, title: str, content: str) -> None:
-        """The pane's key line, then the whole title (wrapped, every line of it) above the body."""
+        """The pane's key line, then the whole title (wrapped, every line of it) above the fields and body."""
         self.query_one("#details-head", Static).update(Text("── d hide · D open · alt+e edit ──", style="dim"))
         if title:
             content = f"**{_md_escape(title)}**\n\n{content}"

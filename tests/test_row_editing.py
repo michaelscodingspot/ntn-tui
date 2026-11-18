@@ -1184,14 +1184,15 @@ def test_d_shows_the_cursor_rows_body_and_follows_the_cursor(tmp_path, notion):
         await settle(app, pilot)
         assert details.display and app.cache.db_details("ds")
         assert body.source.startswith("**Alpha**") and "No details yet" in body.source
-        assert notion.body_reads == []  # known empty: no fetch
+        assert "**Status:** Done" in body.source  # the fields, as D shows them
+        assert notion.body_reads == ["a"]
         await go(app, pilot, "j")
         await settle(app, pilot)
-        assert "call HR" in body.source and "Status" not in body.source
-        assert notion.body_reads == ["b"]
-        await go(app, pilot, "k", "j")  # back on Beta: from the cache
+        assert "**Status:** Done\n\n---\n\n## Steps" in body.source and "call HR" in body.source
+        assert notion.body_reads == ["a", "b"]
+        await go(app, pilot, "k", "j")  # back on Alpha and Beta: from the cache
         await settle(app, pilot)
-        assert notion.body_reads == ["b"]
+        assert notion.body_reads == ["a", "b"]
         await go(app, pilot, "d")
         assert not details.display and not app.cache.db_details("ds")
 

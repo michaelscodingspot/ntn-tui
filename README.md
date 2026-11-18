@@ -140,9 +140,9 @@ text (rich text) cell opens an editor in place that grows down with the text: `e
 Rows whose page has content (more than empty lines) show `≡` in the grid's left gutter. The
 check is one Notion call per row, in the background, kept in the `row_bodies` cache table until
 the row is edited again. `d` opens a pane under the grid showing the cursor row's whole title
-(wrapped, so long titles cut with `…` or `⏬` in the grid read in full) and its page body
-(properties left out: the grid shows them), following the cursor; bodies are cached like page
-previews, so `D` then opens the row at once.
+(wrapped, so long titles cut with `…` or `⏬` in the grid read in full), then its fields and
+page body as `D` shows them, following the cursor. Each row's page is fetched once and cached
+like page previews (until the row is edited), so `D` then opens the row at once.
 
 `ctrl+o` asks which repo (aut, notion-tui, jira-board, Obics, or a folder you type), then opens
 the prompt `task: <cell text>` (the cell's full text) in an editor box to change it (`ctrl+s`
