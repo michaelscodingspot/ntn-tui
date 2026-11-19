@@ -22,7 +22,9 @@ def flag_path() -> Path:
 
 
 def _socket() -> str:
-    return f"unix:{os.environ.get('XDG_RUNTIME_DIR', '')}/notion-tui.sock"
+    # Same path the `nui` wrapper gives kitty: macOS has no XDG_RUNTIME_DIR, so the per-user TMPDIR.
+    base = os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("TMPDIR") or "/tmp"
+    return f"unix:{base}/notion-tui.sock"
 
 
 def available() -> bool:
