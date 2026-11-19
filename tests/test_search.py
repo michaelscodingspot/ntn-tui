@@ -75,6 +75,21 @@ def test_cache_content_search_and_unindexed(tmp_path):
     assert [p.id for p in cache.unindexed_pages()] == ["old"]
 
 
+def test_content_cached_within_its_edit_minute_is_fetched_again(tmp_path, monkeypatch):
+    cache = Cache(tmp_path / "c.db")
+    p = page("p", "P", "2026-11-19T10:00:00.000Z")  # Notion's minute-rounded edit time
+    cache.upsert_pages([p])
+    edit = 1795082400.0  # 2026-11-19 10:00:00 UTC
+
+    monkeypatch.setattr("notion_tui.cache.time.time", lambda: edit + 20)
+    cache.put_content(p, "first text")  # a second edit at 10:00:40 would keep the same edit time
+    assert [q.id for q in cache.unindexed_pages()] == ["p"]
+
+    monkeypatch.setattr("notion_tui.cache.time.time", lambda: edit + 75)
+    cache.put_content(p, "final text")  # fetched after the minute: settled until the next edit
+    assert cache.unindexed_pages() == []
+
+
 def test_cache_content_search_folds_non_ascii_case(tmp_path):
     cache = Cache(tmp_path / "c.db")
     p = page("p", "P")

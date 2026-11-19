@@ -15,6 +15,7 @@ from pathlib import Path
 from .ntn import Node, Page, View
 
 MAX_DEPTH = 12  # guard against cycles or absurdly deep trees
+EDIT_TIME_STEP = 60  # seconds: Notion rounds last_edited_time down to the minute
 
 # Columns of a Page, in order, from the `pages` table and its parent in `nodes`.
 _PAGE_COLUMNS = "p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), p.kind "
@@ -271,11 +272,15 @@ class Cache:
         return gone
 
     def unindexed_pages(self) -> list[Page]:
-        """Cached pages (not databases) whose content is not cached, or was cached before their last edit."""
+        """Cached pages (not databases) whose content is not cached, was cached before their last edit, or was
+        cached within the minute of that edit: Notion rounds edit times to the minute, so a later edit in the same
+        minute keeps the same time. Fetched once more after that minute, the page counts as cached."""
         rows = self.db.execute(
             _PAGE_SELECT + "LEFT JOIN page_content c ON c.page_id = p.id "
-            "WHERE p.kind = 'page' AND (c.page_id IS NULL OR c.page_last_edited != p.last_edited) "
-            "ORDER BY p.last_edited DESC"
+            "WHERE p.kind = 'page' AND (c.page_id IS NULL OR c.page_last_edited != p.last_edited "
+            "OR c.fetched_at < CAST(strftime('%s', p.last_edited) AS REAL) + ?) "
+            "ORDER BY p.last_edited DESC",
+            (EDIT_TIME_STEP,),
         )
         return [Page(*row) for row in rows]
 

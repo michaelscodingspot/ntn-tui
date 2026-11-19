@@ -297,7 +297,9 @@ closes. Like narrow width, it works only in the `nui` kitty window: kitty runs
 - Search: Notion's search API matches titles only, so text inside pages is searched in the
   `page_content` cache. A background indexer lists every page at startup and every 10 minutes
   (a round still running is left to finish), forgets pages the listing no longer returns (not
-  pinned ones), and fetches one at a time the content of pages not cached since their last edit,
+  pinned ones), and fetches one at a time the content of pages not cached since their last edit
+  (or cached within that edit's minute: Notion rounds edit times to the minute, so a second edit
+  in the same minute would otherwise go unnoticed),
   waiting and trying again when Notion answers "429 rate limited"; the status line shows
   `indexing n/total` meanwhile. Results list title matches first, then pages that
   match only inside, each with a dimmed line of text around the match.
