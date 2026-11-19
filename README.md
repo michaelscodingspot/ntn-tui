@@ -61,6 +61,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `t`            | database, View mode: list / table layout |
 | `,`            | options                                  |
 | `ctrl+alt+w`   | narrow width: middle 70% of the window   |
+| `alt+s`        | copy mode, in the `nui` window (below)   |
 | `?`            | help panel                               |
 | `q`            | quit                                     |
 
@@ -247,6 +248,11 @@ the window, but only while the window spans the screen: tiled to half the screen
 full width. It works only in the kitty window the `nui` launcher opens. kitty sets the margins
 through `narrow-window-watcher.py` in my-automations, which saves the setting in
 `~/.local/state/notion-tui/narrow`, not in `options.json`.
+
+**Copy mode** (`alt+s`) shows the screen as text in a read-only nvim on top of the app, to
+select and copy by keyboard: `s` selects, `y` copies, `enter` copies and closes, `q` / `esc`
+closes. Like narrow width, it works only in the `nui` kitty window: kitty runs
+`Configurations/kitty-config/copy-mode` from my-automations, shared with the mail window.
 
 ## How it works
 
