@@ -108,6 +108,7 @@ class Cache:
         path = path or default_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
+        self.content_version = 0  # goes up on every change to `page_content`, so a content search can be reused
         # SQLite's lower() folds ASCII letters only; content search needs "É" to match "é" as Python does.
         self.db.create_function("fold", 1, str.lower, deterministic=True)
         self.db.executescript(SCHEMA)
@@ -244,6 +245,7 @@ class Cache:
         return cached is not None and cached[1] == page.last_edited
 
     def put_content(self, page: Page, markdown: str) -> None:
+        self.content_version += 1
         with self.db:
             self.db.execute(
                 "INSERT OR REPLACE INTO page_content (page_id, markdown, page_last_edited, fetched_at) "
@@ -285,10 +287,12 @@ class Cache:
         return [Page(*row) for row in rows]
 
     def invalidate(self, page_id: str) -> None:
+        self.content_version += 1
         with self.db:
             self.db.execute("DELETE FROM page_content WHERE page_id = ?", (page_id,))
 
     def forget(self, page_id: str) -> None:
+        self.content_version += 1
         with self.db:
             self.db.execute("DELETE FROM page_content WHERE page_id = ?", (page_id,))
             self.db.execute("DELETE FROM pages WHERE id = ?", (page_id,))

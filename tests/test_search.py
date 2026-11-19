@@ -8,7 +8,7 @@ from notion_tui.app import NotionTUI, PageItem
 from notion_tui.cache import Cache
 from notion_tui.ntn import Page
 from notion_tui.options import Options
-from notion_tui.search import content_matches, plain_text, snippet, title_matches, with_content_matches
+from notion_tui.search import SNIPPET_AFTER, content_matches, plain_text, snippet, title_matches, with_content_matches
 
 
 def page(pid: str, title: str, edited: str = "2026-01-01") -> Page:
@@ -26,6 +26,11 @@ def test_snippet_marks_the_match_and_starts_on_a_word():
     assert text[start:end] == "budget"
     assert text.startswith("…") and not text.startswith("… ")
     assert text.endswith("next year")
+
+
+def test_snippet_keeps_a_row_of_text_after_the_match_not_the_whole_page():
+    text, start, end = snippet("budget " + "word " * 10000, "budget")
+    assert (start, end) == (0, 6) and len(text) == 6 + SNIPPET_AFTER
 
 
 def test_snippet_near_the_start_has_no_ellipsis():
@@ -171,5 +176,77 @@ def test_indexer_waits_and_retries_when_notion_rate_limits(tmp_path, monkeypatch
             await app.workers.wait_for_complete()
             assert cache.unindexed_pages() == []
             assert {p.id for p, _ in cache.content_containing("text of")} == {"a", "b"}
+
+    asyncio.run(run())
+
+
+@pytest.mark.indexer
+def test_indexer_skips_a_failing_page_until_its_next_edit(tmp_path, monkeypatch):
+    pages = [page("bad", "Bad"), page("ok", "Ok", "2026-06-01")]  # the cursor rests on "ok": no preview of "bad"
+    fetches: list[str] = []
+
+    async def search(query="", cursor=None, page_size=50):
+        found = [p for p in pages if query.lower() in p.title.lower()]
+        return sorted(found, key=lambda p: p.last_edited, reverse=True), None  # newest first, like Notion
+
+    async def get_markdown(page_id):
+        fetches.append(page_id)
+        if page_id == "bad":
+            raise ntn.NtnError("unsupported block")
+        return "fine"
+
+    monkeypatch.setattr(ntn, "search", search)
+    monkeypatch.setattr(ntn, "get_markdown", get_markdown)
+    monkeypatch.setattr(NotionTUI, "prefetch", lambda self, *args: None)  # count the indexer's fetches only
+
+    async def run():
+        app = NotionTUI(Cache(tmp_path / "c.db"), Options())
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.2)
+            await app.workers.wait_for_complete()
+            assert {"bad", "ok"} <= set(fetches)  # the preview of the top page fetches "ok" too
+            fetches.clear()
+            app.index_content()  # the next round
+            await app.workers.wait_for_complete()
+            assert fetches == []
+            pages[0] = page("bad", "Bad", "2026-05-01")  # edited: tried again
+            app.index_content()
+            await app.workers.wait_for_complete()
+            assert fetches == ["bad"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.indexer
+def test_later_title_batches_stay_above_content_matches(tmp_path, monkeypatch):
+    first, second = page("t1", "Budget 2026", "2026-03-01"), page("t2", "Budget 2025", "2026-02-01")
+    inside = page("c", "Trip notes", "2026-04-01")
+    bodies = {"t1": "x", "t2": "y", "c": "the budget for food"}
+
+    async def search(query="", cursor=None, page_size=50):
+        if not query:
+            return [inside, first, second], None
+        return ([first], "next") if cursor is None else ([second], None)  # titles only, in two batches
+
+    async def get_markdown(page_id):
+        return bodies[page_id]
+
+    monkeypatch.setattr(ntn, "search", search)
+    monkeypatch.setattr(ntn, "get_markdown", get_markdown)
+
+    async def run():
+        app = NotionTUI(Cache(tmp_path / "c.db"), Options())
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.2)
+            await app.workers.wait_for_complete()
+            app.query_one("#search").value = "budget"
+            await pilot.pause(0.6)
+            await app.workers.wait_for_complete()
+            await pilot.pause(0.3)  # the cursor near the end asks for the next batch
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            items = list(app.query(PageItem))
+            assert [i.page.id for i in items] == ["t1", "t2", "c"]
+            assert [i.snippet is not None for i in items] == [False, False, True]
 
     asyncio.run(run())

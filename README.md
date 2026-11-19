@@ -300,9 +300,11 @@ closes. Like narrow width, it works only in the `nui` kitty window: kitty runs
   pinned ones), and fetches one at a time the content of pages not cached since their last edit
   (or cached within that edit's minute: Notion rounds edit times to the minute, so a second edit
   in the same minute would otherwise go unnoticed),
-  waiting and trying again when Notion answers "429 rate limited"; the status line shows
-  `indexing n/total` meanwhile. Results list title matches first, then pages that
-  match only inside, each with a dimmed line of text around the match.
+  waiting and trying again when Notion answers "429 rate limited"; pages come before database rows,
+  and a page whose fetch fails waits for its next edit. The status line shows
+  `indexing n/total` meanwhile. Each key shows the cached title matches; once typing pauses, pages
+  that match only inside follow them, each with a dimmed line of text around the match, and then
+  Notion's title matches (later batches too) stay above the content matches.
 - Pinned pages (`p`) are kept in the `pinned` table, in pin order, and drawn first in the
   recent list (a search shows the pinned pages it finds first). Startup begins on the topmost
   row, and stays there when Notion's fresh list comes in. A trashed or vanished page loses its pin.

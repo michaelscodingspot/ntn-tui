@@ -133,10 +133,6 @@ class TitleLabel(BidiMixin, Label):
 PIN = "📌 "  # marks a pinned page in the list
 
 
-class SnippetLabel(BidiMixin, Label):
-    """The text around a content match, under the page title."""
-
-
 class PageItem(ListItem):
     def __init__(self, page: Page, pinned: bool = False, snippet: Snippet | None = None) -> None:
         super().__init__()
@@ -155,7 +151,7 @@ class PageItem(ListItem):
             text, start, end = self.snippet
             line = Text(text)
             line.stylize("bold underline", start, end)
-            yield SnippetLabel(line, classes="snippet")
+            yield TitleLabel(line, classes="snippet")
 
 
 class Breadcrumb(BidiMixin, Widget):
@@ -346,9 +342,11 @@ class NotionTUI(App):
         self.shown: list[Page] = []  # pages currently in the list, in order
         self.pinned_ids: set[str] = set()  # IDs of all pinned pages (a search may not draw them all), as last drawn
         self.snippets: dict[str, Snippet] = {}  # page → its content match, for pages a search found only inside
-        self._indexing: tuple[int, int] | None = None  # (done, total) while page content is cached for search
-        self._index_running = False  # a round of the content indexer is under way
-        self._content_hits: tuple[str, list[tuple[Page, Snippet]]] | None = None  # last query's content matches
+        self._indexing: tuple[int, int] | None = None  # (current, total) while page content is cached for search
+        self._index_failed: dict[str, str] = {}  # page → its last_edited when fetching its content failed
+        self._title_hits: list[Page] = []  # the current search's title matches, before its content matches
+        # Last query's content matches, with the cache's content version they were read at.
+        self._content_hits: tuple[str, int, list[tuple[Page, Snippet]]] | None = None
         self._at_start = True  # the first recent list from Notion has not come in yet
         self.current: Page | None = None  # highlighted page
         self.query_text = ""  # active search ("" = recent pages)
@@ -470,11 +468,12 @@ class NotionTUI(App):
         pages = pinned_first(self._visible(self.loaded), self.loaded, pins, recent=not self.query_text)
         pinned = {p.id for p in pins}
         snippets = [self.snippets.get(p.id) for p in pages]
-        same_snippets = snippets == [item.snippet for item in list_view.query(PageItem)]
+        items = list(list_view.query(PageItem))
+        same_snippets = snippets == [item.snippet for item in items]
         if pages and same_rows(pages, self.shown) and pinned == self.pinned_ids and same_snippets:
             # Fresh data that draws the same rows (often the cached list, confirmed): rebuilding would blink.
             self.shown = pages
-            for item, page in zip(list_view.query(PageItem), pages):
+            for item, page in zip(items, pages):
                 item.page = page
             self._update_status()
             return
@@ -551,11 +550,19 @@ class NotionTUI(App):
         if not more:
             pages, self._created = with_unindexed(pages, self._created, query, self._created_during)
             if query:
+                self._title_hits = pages
                 pages, self.snippets = self._with_content_matches(query, pages)
         self.next_cursor = next_cursor
         if more:
             known = {p.id for p in self.loaded}
-            await self._append_pages(pages)
+            if query:
+                # More title matches go above the content matches, not after them.
+                titles = {p.id for p in self._title_hits}
+                self._title_hits = self._title_hits + [p for p in pages if p.id not in titles]
+                merged, self.snippets = self._with_content_matches(query, self._title_hits)
+                await self._show_pages(merged, keep_id=self.current.id if self.current else None)
+            else:
+                await self._append_pages(pages)
             if next_cursor and all(p.id in known for p in pages):
                 # Every page was already listed from the cache: no new row to scroll onto, so fetch on.
                 self.load_list(query, more=True)
@@ -606,37 +613,45 @@ class NotionTUI(App):
         self.next_cursor = None
         if self._search_timer:
             self._search_timer.stop()
-        # Instant local answer from the cache, then ask Notion once typing pauses.
+        # Instant title matches from the cache on each key; once typing pauses, the matches inside pages
+        # (a scan of all cached page text, too slow for every key) and then Notion's answer.
+        self.snippets = {}
         if query:
-            local = page_search.title_matches(self.cache.recent_pages(limit=2000), query)
-            local, self.snippets = self._with_content_matches(query, local)
+            self._title_hits = page_search.title_matches(self.cache.recent_pages(limit=2000), query)
+            local = self._title_hits
         else:
-            self.snippets = {}
-            self._content_hits = None
+            self._title_hits = []
             local = self.cache.recent_pages()
         await self._show_pages(local, keep_id=self.current.id if self.current else None)
-        self._search_timer = self.set_timer(SEARCH_DEBOUNCE, lambda: self.load_list(query))
+        self._search_timer = self.set_timer(SEARCH_DEBOUNCE, lambda: self._search_paused(query))
+
+    async def _search_paused(self, query: str) -> None:
+        if query and query == self.query_text:
+            pages, self.snippets = self._with_content_matches(query, self._title_hits)
+            await self._show_pages(pages, keep_id=self.current.id if self.current else None)
+        self.load_list(query)
 
     def _with_content_matches(self, query: str, title_hits: list[Page]) -> tuple[list[Page], dict[str, Snippet]]:
         """Title matches, then cached pages that contain `query` inside, and those pages' snippets.
-        The cache is scanned once per query: typing shows it, Notion's answer for the same query reuses it."""
-        if not self._content_hits or self._content_hits[0] != query:
-            self._content_hits = (query, page_search.content_matches(self.cache.content_containing(query), query))
-        return page_search.with_content_matches(title_hits, self._content_hits[1])
+        The cache is scanned once per query and content version: Notion's answer for the same query reuses it."""
+        version = self.cache.content_version
+        if not self._content_hits or self._content_hits[:2] != (query, version):
+            found = page_search.content_matches(self.cache.content_containing(query), query)
+            self._content_hits = (query, version, found)
+        return page_search.with_content_matches(title_hits, self._content_hits[2])
 
     def _index_tick(self) -> None:
-        if not self._index_running:  # a long round (a big workspace) is left to finish, not restarted
+        # A long round (a big workspace) is left to finish, not restarted.
+        if not any(w.group == "index" and w.is_running for w in self.workers):
             self.index_content()
 
-    @work(exclusive=True, group="index")
+    @work(group="index")
     async def index_content(self) -> None:
         """Cache the content of every page, so a search also finds text inside pages (Notion's search
         matches titles only). Lists all pages first, then fetches those not cached since their last edit."""
-        self._index_running = True
         try:
             await self._index_round()
         finally:
-            self._index_running = False
             self._indexing = None
             self._update_status()
 
@@ -653,33 +668,40 @@ class NotionTUI(App):
             return  # tried again on the next round
         # A complete listing: pages it did not return were trashed or unshared, so their text would match
         # forever. A page created here may not be searchable yet, hence the round's grace.
-        self.cache.forget_unseen(started - INDEX_SECONDS)
-        todo = self.cache.unindexed_pages()
-        if not todo:
-            return
-        # One page at a time, backing off when Notion says too many requests: the indexer shares the
-        # integration's rate limit (about 3 requests a second) with the user's own previews and searches.
-        for done, page in enumerate(todo):
+        gone = self.cache.forget_unseen(started - INDEX_SECONDS)
+        # A page whose fetch failed waits for its next edit (or a restart), not every round.
+        todo = [p for p in self.cache.unindexed_pages() if self._index_failed.get(p.id) != p.last_edited]
+        todo.sort(key=lambda p: p.is_entry)  # free pages before database rows, which the list may hide
+        fetched = False
+        for done, page in enumerate(todo, 1):
             self._indexing = (done, len(todo))
             self._update_status()
-            wait = INDEX_WAIT
-            for attempt in range(INDEX_RETRIES + 1):
-                try:
-                    self.cache.put_content(page, await ntn.get_markdown(page.id))
-                    break
-                except ntn.RateLimited:
-                    if attempt == INDEX_RETRIES:
-                        return  # Notion stays busy: the next round picks up from here
+            cached = await self._index_page(page)
+            if cached is None:
+                break  # Notion stays busy: the next round picks up from here
+            fetched = fetched or cached
+        if self.query_text and (gone or fetched):
+            # Show the content matches found meanwhile, from the cache: Notion's title results are unchanged.
+            pages, self.snippets = self._with_content_matches(self.query_text, self._title_hits)
+            await self._show_pages(pages, keep_id=self.current.id if self.current else None)
+
+    async def _index_page(self, page: Page) -> bool | None:
+        """Cache one page's content for search, one request at a time, backing off when Notion says too many
+        requests: the indexer shares the integration's rate limit (about 3 requests a second) with the user's
+        own previews and searches. True when cached, False when the fetch failed, None when Notion stayed busy."""
+        wait = INDEX_WAIT
+        for attempt in range(INDEX_RETRIES + 1):
+            try:
+                self.cache.put_content(page, await ntn.get_markdown(page.id))
+                return True
+            except ntn.RateLimited:
+                if attempt < INDEX_RETRIES:
                     await asyncio.sleep(wait)
                     wait *= 2
-                except NtnError:
-                    break  # tried again on the next round
-        self._content_hits = None
-        if self.query_text:
-            # Show the content matches found meanwhile, from the cache: Notion's title results are unchanged.
-            titles = [p for p in self.loaded if p.id not in self.snippets]
-            pages, self.snippets = self._with_content_matches(self.query_text, titles)
-            await self._show_pages(pages, keep_id=self.current.id if self.current else None)
+            except NtnError:
+                self._index_failed[page.id] = page.last_edited
+                return False
+        return None
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "dbquery":

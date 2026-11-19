@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from .ntn import Page
 
 SNIPPET_BEFORE = 20  # characters of context kept before the match
+SNIPPET_AFTER = 200  # characters kept after the match: more than a list row shows
 CONTENT_LIMIT = 300  # most pages listed as matched inside
 
 Snippet = tuple[str, int, int]  # text, match start, match end
@@ -50,7 +51,7 @@ def snippet(markdown: str, query: str) -> Snippet | None:
         space = text.find(" ", start, at)  # start on a word
         start = space + 1 if space >= 0 else start
     prefix = "…" if start else ""
-    shown = prefix + text[start:]
+    shown = prefix + text[start:end + SNIPPET_AFTER]
     shift = len(prefix) - start
     return shown, at + shift, end + shift
 
