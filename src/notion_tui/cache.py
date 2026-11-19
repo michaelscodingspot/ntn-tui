@@ -248,6 +248,26 @@ class Cache:
                 (page.id, markdown, page.last_edited, time.time()),
             )
 
+    def content_containing(self, text: str, limit: int = 300) -> list[tuple[Page, str]]:
+        """Cached pages whose Markdown contains `text` (any case), newest edit first, with their Markdown."""
+        rows = self.db.execute(
+            "SELECT p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), "
+            "p.kind, c.markdown FROM pages p LEFT JOIN nodes n ON n.id = p.id "
+            "JOIN page_content c ON c.page_id = p.id "
+            "WHERE instr(lower(c.markdown), ?) > 0 ORDER BY p.last_edited DESC LIMIT ?",
+            (text.lower(), limit),
+        )
+        return [(Page(*row[:7]), row[7]) for row in rows]
+
+    def unindexed_pages(self) -> list[Page]:
+        """Cached pages (not databases) whose content is not cached, or was cached before their last edit."""
+        rows = self.db.execute(
+            _PAGE_SELECT + "LEFT JOIN page_content c ON c.page_id = p.id "
+            "WHERE p.kind = 'page' AND (c.page_id IS NULL OR c.page_last_edited != p.last_edited) "
+            "ORDER BY p.last_edited DESC"
+        )
+        return [Page(*row) for row in rows]
+
     def invalidate(self, page_id: str) -> None:
         with self.db:
             self.db.execute("DELETE FROM page_content WHERE page_id = ?", (page_id,))

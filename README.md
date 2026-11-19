@@ -43,7 +43,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `esc`          | back to list / clear search              |
 | `tab`          | search → list → preview; grid: next cell |
 | `w`            | switch list ↔ preview (skips search)     |
-| `/`            | search (instant from cache, then Notion) |
+| `/`            | search titles and page text              |
 | `e`            | edit page in `$VISUAL` / `$EDITOR`; on a database, the Edit mode grid |
 | `n`            | new page: title and place, then `$EDITOR` |
 | `x`            | delete page or database: moves to trash (asks first) |
@@ -294,6 +294,11 @@ closes. Like narrow width, it works only in the `nui` kitty window: kitty runs
   a minute while a dialog is open or an edit, save or fetch of the page is running.
 - The rows query is the view's filter AND the filter line, and the sort picker's sort, else
   the view's. Properties are referred to by ID, so renamed properties keep working.
+- Search: Notion's search API matches titles only, so text inside pages is searched in the
+  `page_content` cache. A background indexer lists every page at startup and every 10 minutes
+  and fetches (2 at a time) the content of pages not cached since their last edit; the status
+  line shows `indexing n/total` meanwhile. Results list title matches first, then pages that
+  match only inside, each with a dimmed line of text around the match.
 - Pinned pages (`p`) are kept in the `pinned` table, in pin order, and drawn first in the
   recent list (a search shows the pinned pages it finds first). Startup begins on the topmost
   row, and stays there when Notion's fresh list comes in. A trashed or vanished page loses its pin.
