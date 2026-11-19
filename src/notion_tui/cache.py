@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 from .ntn import Node, Page, View
@@ -16,10 +17,9 @@ from .ntn import Node, Page, View
 MAX_DEPTH = 12  # guard against cycles or absurdly deep trees
 
 # Columns of a Page, in order, from the `pages` table and its parent in `nodes`.
-_PAGE_SELECT = (
-    "SELECT p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), p.kind "
-    "FROM pages p LEFT JOIN nodes n ON n.id = p.id "
-)
+_PAGE_COLUMNS = "p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), p.kind "
+_PAGE_FROM = "FROM pages p LEFT JOIN nodes n ON n.id = p.id "
+_PAGE_SELECT = "SELECT " + _PAGE_COLUMNS + _PAGE_FROM
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages (
@@ -107,6 +107,8 @@ class Cache:
         path = path or default_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
+        # SQLite's lower() folds ASCII letters only; content search needs "É" to match "é" as Python does.
+        self.db.create_function("fold", 1, str.lower, deterministic=True)
         self.db.executescript(SCHEMA)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(pages)")}
         with self.db:
@@ -248,16 +250,25 @@ class Cache:
                 (page.id, markdown, page.last_edited, time.time()),
             )
 
-    def content_containing(self, text: str, limit: int = 300) -> list[tuple[Page, str]]:
-        """Cached pages whose Markdown contains `text` (any case), newest edit first, with their Markdown."""
+    def content_containing(self, text: str) -> Iterator[tuple[Page, str]]:
+        """Cached pages whose Markdown contains `text` (any case), newest edit first, with their Markdown.
+        Read lazily: the caller stops once it has enough."""
         rows = self.db.execute(
-            "SELECT p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), "
-            "p.kind, c.markdown FROM pages p LEFT JOIN nodes n ON n.id = p.id "
-            "JOIN page_content c ON c.page_id = p.id "
-            "WHERE instr(lower(c.markdown), ?) > 0 ORDER BY p.last_edited DESC LIMIT ?",
-            (text.lower(), limit),
+            "SELECT " + _PAGE_COLUMNS + ", c.markdown " + _PAGE_FROM + "JOIN page_content c ON c.page_id = p.id "
+            "WHERE instr(fold(c.markdown), ?) > 0 ORDER BY p.last_edited DESC",
+            (text.lower(),),
         )
-        return [(Page(*row[:7]), row[7]) for row in rows]
+        for row in rows:
+            yield Page(*row[:7]), row[7]
+
+    def forget_unseen(self, before: float) -> list[str]:
+        """Forget every page no listing has returned since `before` (trashed or no longer shared); their IDs.
+        Pinned pages are kept: one listing that missed a page must not lose its pin."""
+        gone = [row[0] for row in self.db.execute(
+            "SELECT id FROM pages WHERE seen_at < ? AND id NOT IN (SELECT page_id FROM pinned)", (before,))]
+        for page_id in gone:
+            self.forget(page_id)
+        return gone
 
     def unindexed_pages(self) -> list[Page]:
         """Cached pages (not databases) whose content is not cached, or was cached before their last edit."""

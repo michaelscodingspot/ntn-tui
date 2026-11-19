@@ -18,10 +18,16 @@ def opened(monkeypatch):
     return urls
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "indexer: keep the background content indexer on for this test")
+
+
 @pytest.fixture(autouse=True)
-def no_content_index(monkeypatch):
+def no_content_index(request, monkeypatch):
     """The background content indexer stays off, so fake Notions see only the calls a test makes.
-    tests/test_search.py turns it back on for its own app test."""
+    A test marked `indexer` keeps it on."""
+    if request.node.get_closest_marker("indexer"):
+        return
     from notion_tui.app import NotionTUI
 
     monkeypatch.setattr(NotionTUI, "index_content", lambda self: None)
