@@ -250,3 +250,41 @@ def test_later_title_batches_stay_above_content_matches(tmp_path, monkeypatch):
             assert [i.snippet is not None for i in items] == [False, False, True]
 
     asyncio.run(run())
+
+
+@pytest.mark.indexer
+def test_search_finds_a_database_row_by_a_field_though_empty_rows_are_hidden(tmp_path, monkeypatch):
+    row = Page("r", "Standing desk", "2026-02-01", "", "data_source", "ds")  # a row with fields, no content
+    note = page("n", "Notes", "2026-01-01")
+    bodies = {"r": "---\nType: Ergonomics\n---\n", "n": "nothing"}
+
+    async def search(query="", cursor=None, page_size=50):
+        return [p for p in (row, note) if query.lower() in p.title.lower()], None
+
+    async def get_markdown(page_id):
+        return bodies[page_id]
+
+    async def has_body(page_id):
+        return page_id != "r"
+
+    monkeypatch.setattr(ntn, "search", search)
+    monkeypatch.setattr(ntn, "get_markdown", get_markdown)
+    monkeypatch.setattr(ntn, "has_body", has_body)
+
+    async def run():
+        app = NotionTUI(Cache(tmp_path / "c.db"), Options())  # default: only rows with content are listed
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.2)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert [i.page.id for i in app.query(PageItem)] == ["n"]  # the empty row is hidden
+            app.query_one("#search").value = "ergonomics"
+            await pilot.pause(0.6)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            items = list(app.query(PageItem))
+            assert [i.page.id for i in items] == ["r"]
+            text, start, end = items[0].snippet
+            assert text[start:end] == "Ergonomics"
+
+    asyncio.run(run())

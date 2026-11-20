@@ -438,9 +438,10 @@ class NotionTUI(App):
         self._update_status()
 
     def _visible(self, pages: list[Page]) -> list[Page]:
-        """Apply the database entries option. A row just created here stays visible."""
+        """Apply the database entries option. A row just created here stays visible. A search lists the rows
+        it finds by their title or fields even when their page has no content."""
         mode = self.options.database_entries
-        if mode == "yes":
+        if mode == "yes" or (mode == "show-non-empty" and self.query_text):
             return pages
         created = self._created.id if self._created else None
         if mode == "never":
@@ -449,8 +450,8 @@ class NotionTUI(App):
         return [p for p in pages if not p.is_entry or bodies[p.id] or p.id == created]
 
     def _unchecked_entries(self) -> list[Page]:
-        if self.options.database_entries != "show-non-empty":
-            return []
+        if self.options.database_entries != "show-non-empty" or self.query_text:
+            return []  # a search shows rows whether or not they have content
         entries = [p for p in self.loaded if p.is_entry]
         bodies = self.cache.has_body([p.id for p in entries])
         return [p for p in entries if bodies[p.id] is None]

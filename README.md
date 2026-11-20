@@ -241,7 +241,7 @@ Saved in `~/.config/notion-tui/options.json` (changed with `,`).
 
 Database entries are pages that are rows of a database. `show-non-empty` lists only
 entries whose page has content (a block that isn't an empty line); the status line counts
-the hidden ones.
+the hidden ones. A search still lists the entries it finds, by title or by a field's value.
 
 **Narrow width** (`ctrl+alt+w`, or the checkbox under `,`) keeps the app in the middle 70% of
 the window, but only while the window spans the screen: tiled to half the screen it uses the
