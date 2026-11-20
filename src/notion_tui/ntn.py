@@ -22,6 +22,10 @@ class NtnError(RuntimeError):
     """`ntn` exited with a non-zero status."""
 
 
+class RateLimited(NtnError):
+    """Notion refused the request: too many requests (HTTP 429). Worth trying again after a wait."""
+
+
 @dataclass(frozen=True)
 class Page:
     id: str
@@ -69,7 +73,8 @@ async def _run(*args: str, stdin: str | None = None) -> str:
         raise
     if proc.returncode != 0:
         message = err.decode(errors="replace").strip()
-        raise NtnError(message or f"ntn exited with status {proc.returncode}")
+        error = RateLimited if "rate_limited" in message or "429 Too Many Requests" in message else NtnError
+        raise error(message or f"ntn exited with status {proc.returncode}")
     return out.decode(errors="replace")
 
 

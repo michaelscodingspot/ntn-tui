@@ -43,7 +43,7 @@ Focusing the browser window on `o` needs GNOME with the "Window Calls" extension
 | `esc`          | back to list / clear search              |
 | `tab`          | search → list → preview; grid: next cell |
 | `w`            | switch list ↔ preview (skips search)     |
-| `/`            | search (instant from cache, then Notion) |
+| `/`            | search titles and page text              |
 | `e`            | edit page in `$VISUAL` / `$EDITOR`; on a database, the Edit mode grid |
 | `n`            | new page: title and place, then `$EDITOR` |
 | `x`            | delete page or database: moves to trash (asks first) |
@@ -241,7 +241,7 @@ Saved in `~/.config/notion-tui/options.json` (changed with `,`).
 
 Database entries are pages that are rows of a database. `show-non-empty` lists only
 entries whose page has content (a block that isn't an empty line); the status line counts
-the hidden ones.
+the hidden ones. A search still lists the entries it finds, by title or by a field's value.
 
 **Narrow width** (`ctrl+alt+w`, or the checkbox under `,`) keeps the app in the middle 70% of
 the window, but only while the window spans the screen: tiled to half the screen it uses the
@@ -294,6 +294,17 @@ closes. Like narrow width, it works only in the `nui` kitty window: kitty runs
   a minute while a dialog is open or an edit, save or fetch of the page is running.
 - The rows query is the view's filter AND the filter line, and the sort picker's sort, else
   the view's. Properties are referred to by ID, so renamed properties keep working.
+- Search: Notion's search API matches titles only, so text inside pages is searched in the
+  `page_content` cache. A background indexer lists every page at startup and every 10 minutes
+  (a round still running is left to finish), forgets pages the listing no longer returns (not
+  pinned ones), and fetches one at a time the content of pages not cached since their last edit
+  (or cached within that edit's minute: Notion rounds edit times to the minute, so a second edit
+  in the same minute would otherwise go unnoticed),
+  waiting and trying again when Notion answers "429 rate limited"; pages come before database rows,
+  and a page whose fetch fails waits for its next edit. The status line shows
+  `indexing n/total` meanwhile. Each key shows the cached title matches; once typing pauses, pages
+  that match only inside follow them, each with a dimmed line of text around the match, and then
+  Notion's title matches (later batches too) stay above the content matches.
 - Pinned pages (`p`) are kept in the `pinned` table, in pin order, and drawn first in the
   recent list (a search shows the pinned pages it finds first). Startup begins on the topmost
   row, and stays there when Notion's fresh list comes in. A trashed or vanished page loses its pin.

@@ -9,17 +9,18 @@ import json
 import os
 import sqlite3
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 from .ntn import Node, Page, View
 
 MAX_DEPTH = 12  # guard against cycles or absurdly deep trees
+EDIT_TIME_STEP = 60  # seconds: Notion rounds last_edited_time down to the minute
 
 # Columns of a Page, in order, from the `pages` table and its parent in `nodes`.
-_PAGE_SELECT = (
-    "SELECT p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), p.kind "
-    "FROM pages p LEFT JOIN nodes n ON n.id = p.id "
-)
+_PAGE_COLUMNS = "p.id, p.title, p.last_edited, p.url, COALESCE(n.parent_kind, ''), COALESCE(n.parent_id, ''), p.kind "
+_PAGE_FROM = "FROM pages p LEFT JOIN nodes n ON n.id = p.id "
+_PAGE_SELECT = "SELECT " + _PAGE_COLUMNS + _PAGE_FROM
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages (
@@ -107,6 +108,9 @@ class Cache:
         path = path or default_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
+        self.content_version = 0  # goes up on every change to `page_content`, so a content search can be reused
+        # SQLite's lower() folds ASCII letters only; content search needs "É" to match "é" as Python does.
+        self.db.create_function("fold", 1, str.lower, deterministic=True)
         self.db.executescript(SCHEMA)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(pages)")}
         with self.db:
@@ -241,6 +245,7 @@ class Cache:
         return cached is not None and cached[1] == page.last_edited
 
     def put_content(self, page: Page, markdown: str) -> None:
+        self.content_version += 1
         with self.db:
             self.db.execute(
                 "INSERT OR REPLACE INTO page_content (page_id, markdown, page_last_edited, fetched_at) "
@@ -248,11 +253,46 @@ class Cache:
                 (page.id, markdown, page.last_edited, time.time()),
             )
 
+    def content_containing(self, text: str) -> Iterator[tuple[Page, str]]:
+        """Cached pages whose Markdown contains `text` (any case), newest edit first, with their Markdown.
+        Read lazily: the caller stops once it has enough."""
+        rows = self.db.execute(
+            "SELECT " + _PAGE_COLUMNS + ", c.markdown " + _PAGE_FROM + "JOIN page_content c ON c.page_id = p.id "
+            "WHERE instr(fold(c.markdown), ?) > 0 ORDER BY p.last_edited DESC",
+            (text.lower(),),
+        )
+        for row in rows:
+            yield Page(*row[:7]), row[7]
+
+    def forget_unseen(self, before: float) -> list[str]:
+        """Forget every page no listing has returned since `before` (trashed or no longer shared); their IDs.
+        Pinned pages are kept: one listing that missed a page must not lose its pin."""
+        gone = [row[0] for row in self.db.execute(
+            "SELECT id FROM pages WHERE seen_at < ? AND id NOT IN (SELECT page_id FROM pinned)", (before,))]
+        for page_id in gone:
+            self.forget(page_id)
+        return gone
+
+    def unindexed_pages(self) -> list[Page]:
+        """Cached pages (not databases) whose content is not cached, was cached before their last edit, or was
+        cached within the minute of that edit: Notion rounds edit times to the minute, so a later edit in the same
+        minute keeps the same time. Fetched once more after that minute, the page counts as cached."""
+        rows = self.db.execute(
+            _PAGE_SELECT + "LEFT JOIN page_content c ON c.page_id = p.id "
+            "WHERE p.kind = 'page' AND (c.page_id IS NULL OR c.page_last_edited != p.last_edited "
+            "OR c.fetched_at < CAST(strftime('%s', p.last_edited) AS REAL) + ?) "
+            "ORDER BY p.last_edited DESC",
+            (EDIT_TIME_STEP,),
+        )
+        return [Page(*row) for row in rows]
+
     def invalidate(self, page_id: str) -> None:
+        self.content_version += 1
         with self.db:
             self.db.execute("DELETE FROM page_content WHERE page_id = ?", (page_id,))
 
     def forget(self, page_id: str) -> None:
+        self.content_version += 1
         with self.db:
             self.db.execute("DELETE FROM page_content WHERE page_id = ?", (page_id,))
             self.db.execute("DELETE FROM pages WHERE id = ?", (page_id,))
