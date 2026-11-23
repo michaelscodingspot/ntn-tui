@@ -169,6 +169,21 @@ def order_column(schema: list[dict]) -> str | None:
     return next((p["name"] for p in schema if p["name"].strip() == ORDER_NAME and p["type"] == "number"), None)
 
 
+STATE_NAME = "_state"  # a select or status column; a new row starts at its "new" option
+STATE_NEW = "new"
+
+
+def new_row_state(schema: list[dict]) -> dict:
+    """{name: value} that sets a new row's `_state` to its "new" option, or {} when the database
+    has no such column or option."""
+    for prop in schema:
+        if prop["name"].strip() == STATE_NAME and prop["type"] in ("select", "status"):
+            option = next((o for o in prop.get("options") or [] if o.strip().lower() == STATE_NEW), None)
+            if option is not None:
+                return {prop["name"]: pick_value(prop["type"], [option])[0]}
+    return {}
+
+
 def _number(row: dict, name: str) -> float | None:
     prop = row["properties"].get(name) or {}
     return prop.get("number") if prop.get("type") == "number" else None

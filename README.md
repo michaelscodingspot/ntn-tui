@@ -172,6 +172,9 @@ rows inserted between later; 8 when no row has an `_ord`. `I` above a row with n
 it empty. `i` on the last loaded row while more rows wait asks for `m` first: the next row's
 `_ord` isn't known.
 
+A database with a select or status column named `_state` that has a `new` option starts every
+new row (`n`, `i`, `I`) at `new`.
+
 `alt+j` / `alt+k` reorder rows in a database with a number column named `_ord`, when the rows are
 sorted by `_ord` first (ascending or descending). The row and its neighbour get `_ord` values spread
 evenly between the rows around them, whole numbers when they fit (5, 13, 14, 20 → 5, 10, 15, 20), so

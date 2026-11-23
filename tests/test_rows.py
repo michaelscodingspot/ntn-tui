@@ -237,3 +237,13 @@ def test_text_keeps_line_breaks_a_title_doesnt():
     assert rows.cell_text(title) == rows.edit_text(title) == "one two"
     assert rows.parse_text("rich_text", "one\ntwo\n") == ({"rich_text": [{"text": {"content": "one\ntwo"}}]}, "one\ntwo")
     assert rows.parse_text("title", "one\ntwo")[1] == "one two"
+
+
+def test_new_row_state():
+    schema = [{"name": "Name", "type": "title"}, {"name": "_state", "type": "select", "options": ["done", "New"]}]
+    assert rows.new_row_state(schema) == {"_state": {"select": {"name": "New"}}}
+    status = [{"name": "_state", "type": "status", "options": ["new"]}]
+    assert rows.new_row_state(status) == {"_state": {"status": {"name": "new"}}}
+    assert rows.new_row_state([{"name": "_state", "type": "select", "options": ["done"]}]) == {}
+    assert rows.new_row_state([{"name": "_state", "type": "rich_text"}]) == {}
+    assert rows.new_row_state([]) == {}

@@ -1337,7 +1337,9 @@ class NotionTUI(App):
                     if value is row_edit.Order.LAST:  # all rows count, loaded or not: Notion is asked
                         highest = await ntn.highest_number(page.id, new.ord_name)
                         value = row_edit.after_last(highest)
-                    extra = {new.ord_name: {"number": value}} if value is not None else {}
+                    extra = row_edit.new_row_state(self.cache.schema(page.id) or [])
+                    if value is not None:
+                        extra[new.ord_name] = {"number": value}
                     row = await ntn.create_row(page.id, title, extra)
         except NtnError as err:
             grid.drop_row(NEW_ROW)
